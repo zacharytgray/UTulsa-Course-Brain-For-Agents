@@ -1,0 +1,22 @@
+#!/bin/sh
+# runs scripts/blackboard.py in whatever playwright env this machine has.
+set -e
+
+REPO=$(cd "$(dirname "$0")/.." && pwd)
+SCRIPT="$REPO/scripts/blackboard.py"
+VENV="$HOME/.course-brain/venv/bin/python3"
+
+if [ -x "$VENV" ]; then
+  exec "$VENV" "$SCRIPT" "$@"
+fi
+
+UV=$(command -v uv || true)
+[ -n "$UV" ] || { [ -x "$HOME/.local/bin/uv" ] && UV="$HOME/.local/bin/uv"; }
+
+if [ -n "$UV" ]; then
+  cd "$REPO"
+  exec "$UV" run --python 3.12 --with playwright python "$SCRIPT" "$@"
+fi
+
+echo "playwright env missing; see docs/OPERATIONS.md" >&2
+exit 1
