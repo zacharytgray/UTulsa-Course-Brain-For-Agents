@@ -85,7 +85,12 @@ kill "$watchdog" 2>/dev/null || true
 # keep the workdir copies of the rulebook fresh. class-folder claude sessions
 # import _course-brain-rules.md relatively (imports can't reach outside the
 # project dir), so each workdir and the semester root carry a synced copy
-grep -h '^workdir:' classes/*/class.md | sed 's/^workdir: *"\{0,1\}//; s/"\{0,1\} *$//' | while IFS= read -r wd; do
+grep -h '^workdir:' classes/*/class.md \
+  | sed 's/^workdir: *//; s/[[:space:]]*#.*$//; s/^"//; s/"$//' \
+  | while IFS= read -r wd; do
+  # a class whose workdir isn't filled in yet leaves wd empty, and dirname ""
+  # is "." - without this the rulebook lands in the repo root and gets committed
+  [ -n "$wd" ] || continue
   [ -d "$wd" ] && cp CLAUDE.md "$wd/_course-brain-rules.md"
   sem=$(dirname "$wd")
   [ -d "$sem" ] && cp CLAUDE.md "$sem/_course-brain-rules.md"
