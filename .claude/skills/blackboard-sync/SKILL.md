@@ -28,7 +28,7 @@ The scheduled scan (`scripts/blackboard-scan.py`) already handles the gradebook-
 5. Build a list of posted items. For each: title, due date if shown, posted date if shown, the item's url, and any attachment filenames.
 6. Diff against the repo:
    - assignments: compare against the `title:` frontmatter of every `classes/<class>/assignments/*.md` (skip `_template.md`), matched loosely (case, punctuation, "HW 1" vs "HW1")
-   - materials: compare against the filenames in the class's `workdir` under `materials/` (and the rare text-native artifact in `classes/<class>/materials/`)
+   - materials: compare against the filenames already mirrored into the class's `workdir` under `harvey/`
    - Anything ambiguous goes in the report as "possible match — check", not filed as new.
 7. For each genuinely new assignment, write `classes/<class>/assignments/<slug>.md` (kebab-case slug from the title):
 
@@ -45,10 +45,16 @@ todoist_task_id: ""
 
    Always double-quote `title` and `source` — titles like `HW #1` and urls with `#fragments` break unquoted. Body: the assignment description converted to markdown. Keep the professor's wording; don't summarize or improve it.
 
-8. Attachments and downloads: **every download needs the user's explicit ok, per action.** List the attachments you found (filename, what it's attached to) and ask before downloading anything. Once approved:
-   - all downloaded files go to the class's `workdir` (class.md frontmatter) under `materials/`,
-     keeping the original filename (or a cleaned version of it). Nothing binary goes in this repo.
-9. Report: new assignments filed, new materials downloaded, items skipped as already-present, ambiguous matches, and anything the page wouldn't show. Then suggest running `/assignment-sync` to push the new deadlines to Todoist.
+8. Attachments and downloads: run `scripts/blackboard-mirror.py <class-code>`. It walks the class's
+   content tree, downloads every file to the class's `workdir` under
+   `harvey/<blackboard folder path>/<original filename>`, and fills assignment spec text into
+   `classes/<class>/assignments/*.md` where the `Full spec on Harvey (not yet mirrored).`
+   placeholder sits. It tracks what it has already pulled in `classes/<class>/.bb-mirror.json`, so
+   rerunning is safe. Use `--dry-run` first if you want to see what it would fetch. For a one-off
+   file outside the mirror, `scripts/bb download <path> <dest>` fetches raw bytes — save it under
+   the workdir's `materials/` or a `homework/` subfolder, never in `harvey/`. Nothing binary goes
+   in this repo.
+9. Report: new assignments filed, new materials mirrored, items skipped as already-present, ambiguous matches, and anything the page wouldn't show. Then suggest running `/assignment-sync` to push the new deadlines to Todoist.
 
 ## Harvey API map (verified 2026-08-24)
 
@@ -81,7 +87,23 @@ shows the semester you want, it can default to the wrong one.
 **Gradebook gotchas.** `dueDate` is UTC — convert to America/Chicago (`04:59Z` in summer,
 `05:59Z` in winter both mean 23:59 the previous local day). Dedupe columns by `name`: stale
 duplicates with old dates hang around, so keep the one whose due date falls inside the semester.
-Skip Knowledge Checks, Attendance, and Overall Grade — they aren't assignments.
+Skip Attendance and Overall Grade — they aren't assignments. Knowledge Checks are
+tracked only when `possible` > 0 (a few carry extra credit); zero-point ones are skipped.
+
+**Discussion boards (verified 2026-08-27).** Harvey's discussions are classic
+Original-view boards even though the course shell is Ultra — the JSON discussion endpoints
+(`/learn/api/v1/courses/<id>/discussions/...`) answer `200 {}` with no error, which looks like
+"no posts" but means "wrong API". The working chain:
+
+1. Find the discussion in the content tree: a `resource/x-bb-courselink` item whose
+   `contentDetail` gives a `linkSourceId`; fetch that content id and its
+   `resource/x-bb-forumlink` detail carries the real `forum_id` (and `conferenceId`).
+2. Read the board via the classic HTML/AJAX endpoints with `scripts/bb get <path> --html`:
+   - `/webapps/discussionboard/do/forum?action=list_threads&course_id=<cid>&forum_id=<fid>&nav=discussion_board_entry` — thread list
+   - `.../do/message?action=message_tree&course_id=<cid>&forum_id=<fid>&message_id=<thread root>` — all message ids, authors, nesting levels, timestamps
+   - `.../do/message?action=message_frame&course_id=<cid>&forum_id=<fid>&message_id=<mid>` — one post's body HTML
+   Plain cookie-carrying GETs are enough; no real browser needed. (`action=collect` needs
+   POSTed ids — skip it.) Reading a post does bump its view counter; that's the only side effect.
 
 **Caveat.** `scripts/bb get` wraps these once a state file exists. In the in-app Browser pane,
 same-origin `fetch`/XHR *sometimes* works — but script-context requests can lose session cookies
@@ -95,8 +117,10 @@ for PDFs — verified by capturing a syllabus this way).
 ## Scope rules
 
 - Sign-in is scripted: `scripts/bb login` (1Password service account + TOTP). Claude never types credentials itself — if the script can't sign in, stop and report; don't fall back to manual credential entry.
-- Never modify an existing assignment file, with one exception: filling an empty `source` with the url you just found. Not the due date, not the status, not the body — if Blackboard now shows a different due date, report it and let the user decide.
-- Never download without asking first, and ask per download, not once for the batch.
-- Default is NOT to mirror course materials or assignment attachments — the user may download them locally themselves and doesn't want doubles. Syllabi are the standing exception. Only pull other files when asked.
+- Never modify an existing assignment file, with two exceptions: filling an empty `source` with the url you just found, and the mirror script replacing a `Full spec on Harvey (not yet mirrored).` placeholder with the real spec. Not the due date, not the status, not the rest of the body — if Blackboard now shows a different due date, report it and let the user decide.
+- Mirror everything by default. Every class's Blackboard content is kept locally so an agent helping with homework already has the slides and handouts.
+- `scripts/blackboard-mirror.py [class-code] [--dry-run]` is the tool for it. Run it instead of downloading files one at a time; it's idempotent, so a rerun only picks up what's new.
+- Files land in the class's `workdir` (class.md frontmatter) under `harvey/`, mirroring the Blackboard folder structure and keeping original filenames. Nothing binary goes in this repo. Text — specs, quiz and test question text, manifests — goes in the repo.
+- `harvey/` is the script's folder alone. It's pruned to match Blackboard (only files the script itself downloaded — don't hand-place files there), and deleting the whole folder is harmless. Files that aren't on Blackboard go in the workdir's `materials/`. The sync never touches `materials/`, `homework/`, `exams/`, `projects/`, or `grading/`.
 - Never accept course agreements, submit anything, or click a submission button. Reading and downloading only.
 - Only touch the classes that have a `blackboard_url`. Skip the rest quietly.

@@ -194,21 +194,55 @@ def do_login(headed=False):
         sys.exit(1)
 
 
-def api(pw, path):
+def api(pw, path, html=False):
     ctx = pw.request.new_context(storage_state=str(STATE), base_url=BASE)
-    r = ctx.get(path, headers={"Accept": "application/json"})
+    accept = "text/html" if html else "application/json"
+    r = ctx.get(path, headers={"Accept": accept})
     ctype = r.headers.get("content-type") or ""
+    # html mode: classic /webapps/ pages (e.g. discussionboard) are text/html by
+    # nature, so only a bounce off-site means the session is dead
     dead = (
         r.status in (401, 302)
         or not r.url.startswith(BASE)
         or "login.microsoftonline.com" in r.url
-        or "text/html" in ctype
+        or (not html and "text/html" in ctype)
     )
     # bounced to the idp = never really had a session; anything else = it went stale
     bounced = not r.url.startswith(BASE) or "login.microsoftonline.com" in r.url
     body = r.text()
     ctx.dispose()
     return dead, r.status, body, bounced
+
+
+def api_bytes(pw, path):
+    ctx = pw.request.new_context(storage_state=str(STATE), base_url=BASE)
+    r = ctx.get(path, headers={"Accept": "*/*"})
+    ctype = r.headers.get("content-type") or ""
+    body = r.body()
+    # files redirect off-host to blackboard's cdn, so url isn't a session tell,
+    # and content-type isn't either - plenty of course files really are html.
+    # sniff the body instead: only the actual sso page means a dead session. a
+    # 403/404 just means the file isn't ours, and relogging in on those burned
+    # a minute apiece
+    dead = (
+        r.status == 401
+        or "login.microsoftonline.com" in r.url
+        or (r.status == 200 and "text/html" in ctype
+            and re.search(rb"login\.microsoftonline\.com|/webapps/login|name=\"loginfmt\"",
+                          body[:20000]) is not None)
+    )
+    ctx.dispose()
+    return dead, r.status, body
+
+
+def api_head(pw, path):
+    ctx = pw.request.new_context(storage_state=str(STATE), base_url=BASE)
+    r = ctx.head(path, headers={"Accept": "*/*"})
+    hdr = {k.lower(): v for k, v in r.headers.items()}
+    # files redirect off-host, so only a 401 or a bounce to the idp is a session tell
+    dead = r.status == 401 or "login.microsoftonline.com" in r.url
+    ctx.dispose()
+    return dead, r.status, hdr
 
 
 def cmd_check():
@@ -229,35 +263,78 @@ def cmd_check():
     return 0
 
 
-def api_or_login(path):
+def api_or_login(path, html=False):
     # one retry behind a fresh login; None means it's still dead
     with sync_playwright() as pw:
-        dead, status, body, _ = api(pw, path) if STATE.exists() else (True, 0, "", True)
+        dead, status, body, _ = api(pw, path, html) if STATE.exists() else (True, 0, "", True)
     if not dead:
         return status, body
     do_login()
     with sync_playwright() as pw:
-        dead, status, body, _ = api(pw, path)
+        dead, status, body, _ = api(pw, path, html)
     if dead:
         sys.stderr.write(f"request failed after login: {status} {path}\n")
         return None, None
     return status, body
 
 
-def cmd_get(path, raw=False):
+def cmd_get(path, raw=False, html=False):
     if not path.startswith("/"):
         sys.stderr.write("path must start with /\n")
         return 1
-    status, body = api_or_login(path)
+    status, body = api_or_login(path, html)
     if body is None:
         return 1
-    if raw:
+    if raw or html:
         print(body)
         return 0
     try:
         print(json.dumps(json.loads(body), indent=2))
     except ValueError:
         print(body)
+    return 0
+
+
+def cmd_head(path):
+    # size/etag without pulling the body - lets a caller tell a swapped file from
+    # an unchanged one when blackboard's own metadata doesn't report a size
+    if not path.startswith("/"):
+        sys.stderr.write("path must start with /\n")
+        return 1
+    with sync_playwright() as pw:
+        dead, status, hdr = api_head(pw, path) if STATE.exists() else (True, 0, {})
+    if dead:
+        do_login()
+        with sync_playwright() as pw:
+            dead, status, hdr = api_head(pw, path)
+    if dead:
+        sys.stderr.write(f"head failed after login: {status} {path}\n")
+        return 1
+    print(json.dumps({"status": status, "length": hdr.get("content-length"),
+                      "etag": hdr.get("etag"), "modified": hdr.get("last-modified")}))
+    return 0
+
+
+def cmd_download(path, dest):
+    if not path.startswith("/"):
+        sys.stderr.write("path must start with /\n")
+        return 1
+    with sync_playwright() as pw:
+        dead, status, body = api_bytes(pw, path) if STATE.exists() else (True, 0, b"")
+    if dead:
+        do_login()
+        with sync_playwright() as pw:
+            dead, status, body = api_bytes(pw, path)
+    if dead:
+        sys.stderr.write(f"download failed after login: {status} {path}\n")
+        return 1
+    if status >= 400:
+        sys.stderr.write(f"download failed: {status} {path}\n")
+        return 1
+    out = Path(dest)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(body)
+    print(f"{out} {len(body)}")
     return 0
 
 
@@ -291,6 +368,13 @@ def main():
     g = sub.add_parser("get")
     g.add_argument("path")
     g.add_argument("--raw", action="store_true")
+    g.add_argument("--html", action="store_true",
+                   help="fetch a classic /webapps/ page (implies --raw)")
+    hd = sub.add_parser("head")
+    hd.add_argument("path")
+    d = sub.add_parser("download")
+    d.add_argument("path")
+    d.add_argument("dest")
     sub.add_parser("courses")
     a = p.parse_args()
 
@@ -300,7 +384,11 @@ def main():
     if a.cmd == "check":
         return cmd_check()
     if a.cmd == "get":
-        return cmd_get(a.path, a.raw)
+        return cmd_get(a.path, a.raw, a.html)
+    if a.cmd == "head":
+        return cmd_head(a.path)
+    if a.cmd == "download":
+        return cmd_download(a.path, a.dest)
     return cmd_courses()
 
 

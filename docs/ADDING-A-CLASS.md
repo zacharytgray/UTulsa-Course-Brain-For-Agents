@@ -21,9 +21,23 @@ This is the ingestion process for a new course. Do it once per class, ideally th
 
    Schedule format: days `MTWRF` (R = Thursday), 24-hour times, `MWF 10:00–10:50`. Several segments are fine: `TR 13:00-14:15, F 9:00-9:50`.
 
-   The copied `assignments/_template.md` and `materials/README.md` are references; every skill and `check.py` skips them, so leave them or delete them.
+   The copied `assignments/_template.md` and `materials/README.md` are references; every skill and `check.py` skips them, so leave them or delete them. `workdir-CLAUDE.md` and `semester-workdir-CLAUDE.md` come along too — they belong in the workdir, not the class dir (step 3), so delete them from the copy once you've placed them.
 
-3. **(you) Syllabus.** Paste it into `classes/<class>/syllabus.md`. The original PDF goes in the class's `workdir` under `materials/` (set `workdir:` in class.md — e.g. a cloud-synced `Coursework/<semester>/<name>/` folder), not in this repo.
+3. **(you) Syllabus.** Paste it into `classes/<class>/syllabus.md`. The original PDF goes in
+   the class's `workdir` under `materials/` (set `workdir:` in class.md — e.g. a cloud-synced
+   `Coursework/<semester>/<name>/` folder), not in this repo. Everything posted on Blackboard
+   arrives on its own in the workdir's `harvey/` — that folder is the mirror, built by
+   `scripts/blackboard-mirror.py`, so don't put anything in it by hand.
+
+   Also drop a `CLAUDE.md` in the workdir, from `classes/_template/workdir-CLAUDE.md`, so
+   agent sessions opened in the class folder know about the system. The shared rules live
+   in `Coursework/<semester>/CLAUDE.md` — created once per semester from
+   `classes/_template/semester-workdir-CLAUDE.md` — and cover everything a repo session
+   knows (skill instructions by path, pull-first rule, common asks); the per-class file
+   only carries the code, schedule, role, and assignment notation. Both import
+   `_course-brain-rules.md`, a copy of this repo's CLAUDE.md that the scheduled job
+   refreshes in every workdir and semester root (Claude's `@import` can't reach outside the
+   project directory, which is why it's copied rather than linked).
 
 4. **(you) Commit** (and push, if your copy has a remote). The agent doesn't commit. Run `python3 scripts/check.py` first if you edited anything by hand. The scheduled job regenerates its own schedule at the next 07:05 weekday run; to make it immediate, run `python3 scripts/gen-schedule.py` on the machine that runs the sync.
 

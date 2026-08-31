@@ -4,12 +4,15 @@
 # file under "## Notes". descriptions and dates are machine-owned (the file is
 # the source of truth, so a due moved in todoist by hand snaps back next run);
 # comments are the user's notes zone - read and mirrored, never written or deleted.
+# checking a task off in todoist is the one thing that flows the other way: it
+# flips the file to submitted.
 import glob
 import json
 import os
 import re
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -30,11 +33,14 @@ TOKEN = token()
 
 
 def req(path, data=None):
+    # `data is not None`, not `data`: close takes an empty POST body, and a falsy {}
+    # would turn it into a GET (405 on /close)
     r = urllib.request.Request(API + path,
                                headers={"Authorization": f"Bearer {TOKEN}",
                                         "Content-Type": "application/json"},
-                               data=json.dumps(data).encode() if data else None)
-    return json.load(urllib.request.urlopen(r))
+                               data=json.dumps(data).encode() if data is not None else None)
+    body = urllib.request.urlopen(r).read()
+    return json.loads(body) if body else None
 
 
 def frontmatter(text):
@@ -86,6 +92,26 @@ def pull_comments(path, text, tid):
     return text, len(new)
 
 
+def completed(tid):
+    # completed tasks drop out of the active list, so ask for the task itself.
+    # a 404 means deleted, not done - leave the file alone
+    try:
+        return bool(req(f"/tasks/{tid}").get("checked"))
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return False
+        raise
+
+
+def mark_submitted(path, text):
+    text = re.sub(r"(?m)^status:[ \t]*open[ \t]*$", "status: submitted", text, count=1)
+    today = datetime.now(ZoneInfo("America/Chicago")).strftime("%Y-%m-%d")
+    if not re.search(r"(?m)^## Submitted\s*$", text):
+        text = text.rstrip() + f"\n\n## Submitted\n\nMarked complete in Todoist on {today}.\n"
+    open(path, "w").write(text)
+    return text
+
+
 def project_id(name):
     for p in req("/projects")["results"]:
         if p["name"] == name:
@@ -96,7 +122,7 @@ def project_id(name):
 def main():
     only = sys.argv[1].lower() if len(sys.argv) > 1 else None
     projects = {}
-    created = refreshed = closed = notes = 0
+    created = refreshed = closed = notes = submitted = 0
     for cls_md in sorted(glob.glob("classes/*/class.md")):
         cdir = os.path.dirname(cls_md)
         if cdir.endswith("_template"):
@@ -115,6 +141,11 @@ def main():
             fm, body = frontmatter(text)
             tid = fm.get("todoist_task_id", "")
             if tid and fm.get("status") == "open":
+                if completed(tid):
+                    mark_submitted(f, text)
+                    submitted += 1
+                    print(f"submitted (checked off in todoist): {f}")
+                    continue
                 text, n = pull_comments(f, text, tid)
                 if n:
                     notes += n
@@ -154,11 +185,17 @@ def main():
                                "project_id": projects[proj],
                                "due_string": due,
                                "description": desc})
-            new = text.replace('todoist_task_id: ""', f'todoist_task_id: "{t["id"]}"', 1)
+            # empty field can be `todoist_task_id: ""` or a bare `todoist_task_id:`;
+            # a missed replace here silently drops the id and the next run duplicates the task
+            new = re.sub(r'(?m)^todoist_task_id:\s*(?:""|\'\')?\s*$',
+                         f'todoist_task_id: "{t["id"]}"', text, count=1)
+            if new == text:
+                print(f"WARNING: could not write id {t['id']} into {f}")
             open(f, "w").write(new)
             created += 1
             print(f"created {t['id']}  [{code}] {fm['title']}")
-    print(f"{created} created, {refreshed} refreshed (desc+due), {closed} closed, {notes} notes pulled")
+    print(f"{created} created, {refreshed} refreshed (desc+due), {closed} closed, "
+          f"{submitted} marked submitted, {notes} notes pulled")
 
 
 if __name__ == "__main__":

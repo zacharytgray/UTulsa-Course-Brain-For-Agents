@@ -1,4 +1,5 @@
 # Syllabus
 
-Paste or sync the syllabus here. Keep the original PDF in the class's workdir under
-`materials/` (see `workdir:` in class.md) if there is one.
+Paste or sync the syllabus here. The original PDF, if there is one, stays in the class's
+workdir (`workdir:` in class.md) — under `harvey/` if it came from Blackboard, under
+`materials/` if it was saved by hand.

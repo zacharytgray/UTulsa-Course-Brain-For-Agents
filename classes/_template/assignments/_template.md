@@ -16,3 +16,12 @@ those keep their due time on the Todoist task so they land on the calendar Todoi
 else is created date-only (the time still shows in the task description) to keep the
 calendar uncluttered. Attachments sit beside this file as `<slug>.<ext>` or `<slug>-<n>.<ext>`.
 This file is skipped by every skill and by check.py, so leaving it in a real class dir is fine.
+
+When the work is turned in, flip `status` to submitted and end the file with a `## Submitted`
+section recording what was turned in. For file deliverables, list the paths relative to the
+class's `workdir` (from class.md), e.g. `homework/L01/l01-writeup.pdf`. For text-native
+submissions with no file (discussion posts), put the actual text you posted.
+
+## Submitted
+
+<workdir-relative paths, or the posted text itself>
