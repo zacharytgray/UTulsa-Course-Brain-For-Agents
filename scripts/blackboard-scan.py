@@ -17,7 +17,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOCAL = ZoneInfo("America/Chicago")
 SUMMARY = "/tmp/course-brain-scan-summary"
 REVIEW = "inbox/blackboard-review.md"
-SKIP = ("knowledge check", "attendance", "overall grade")
+SKIP = ("attendance", "overall grade")
 
 REVIEW_HEADER = """# Blackboard review
 
@@ -176,7 +176,9 @@ def scan(code, cdir, cfm, columns, contents):
     items = {i["id"]: i for i in contents}
 
     wanted = [c for c in columns
-              if col_name(c) and not any(s in col_name(c).lower() for s in SKIP)]
+              if col_name(c) and not any(s in col_name(c).lower() for s in SKIP)
+              # zero-point knowledge checks aren't tracked; the few with extra credit are
+              and not ("knowledge check" in col_name(c).lower() and not c.get("possible"))]
     by_name = {}
     for c in wanted:
         by_name.setdefault(norm(col_name(c)), []).append(c)

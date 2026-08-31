@@ -19,9 +19,9 @@ Granola (record lecture, folder per class)
    ▼
 classes/<class>/lectures/YYYY-MM-DD.md   ← summary + full transcript
    │
-Blackboard / Harvey (scripted login + API scan + browser skill)
+Blackboard / Harvey (scripted login + API scan + mirror; browser skill as fallback)
    ▼
-classes/<class>/assignments/ + syllabus.md (+ files in the class workdir)
+classes/<class>/assignments/ + syllabus.md   (files → workdir harvey/)
    │  deadline extraction
    ▼
 Todoist (one project per class, or one School project)
@@ -43,6 +43,8 @@ The scheduled job runs `/lecture-sync` 30 minutes after each class ends, on a la
 
 - Two layers. `scripts/blackboard-scan.py` (part of the scheduled job) diffs the gradebook and content tree through Blackboard's JSON API: new graded assignments get filed, moved due dates get fixed, anything ambiguous gets flagged to `inbox/blackboard-review.md` for a human decision. The `/blackboard-sync` skill covers the rest interactively — browsing content, syllabi, downloads.
 - **Login is scripted.** `scripts/blackboard.py` runs the whole Entra SSO flow in Playwright, with the username, password, and TOTP pulled from a password-manager item. The agent never handles the raw credentials — the script does, and the saved session lives in `~/.course-brain/bb-state.json`, outside the repo. This is what makes scheduled, unattended Blackboard scans possible.
+- **Everything is mirrored.** `scripts/blackboard-mirror.py` pulls each class's whole content tree into the workdir's `harvey/`, and spec text into the assignment files. The point is that an agent helping with homework has the slides on hand instead of fetching them mid-task.
+- **`harvey/` is script-owned**, which is what makes that safe. It's regenerated and pruned to match Blackboard; your own folders (`materials/`, `homework/`, `exams/`, `projects/`, `grading/`) are never touched by the sync. Nothing hand-placed can be lost to a prune, and the mirror can be deleted and rebuilt without thinking about it.
 
 ### Todoist
 
@@ -71,7 +73,9 @@ ends: 2026-12-11     # the job stops scheduling class runs after this
 ---
 ```
 
-Assignments are `assignments/<slug>.md` with frontmatter (title, due, posted, source, status, todoist_task_id, optional calendar) and the spec as the body — see `classes/_template/assignments/_template.md`. Attachments sit beside them. Binary materials (slides, PDFs) go in the class's `workdir` under `materials/`, outside the repo; `classes/<class>/materials/` holds the rare text-native artifact.
+Assignments are `assignments/<slug>.md` with frontmatter (title, due, posted, source, status, todoist_task_id, optional calendar) and the spec as the body — see `classes/_template/assignments/_template.md`. A submitted one ends with a `## Submitted` section: workdir-relative paths for file deliverables, or the posted text itself for a discussion post.
+
+Course files don't live in the repo. Every Blackboard file — slides, PDFs, media — is mirrored into the class's `workdir` (`workdir:` in `class.md`) under `harvey/`, keeping Blackboard's folder structure. The repo holds text only. `scripts/blackboard-mirror.py` builds and refreshes the mirror; the workdir's `materials/` stays for files you place by hand, and `classes/<class>/materials/` in the repo holds the rare text-native artifact.
 
 **Adding a class** is its own doc: [ADDING-A-CLASS.md](ADDING-A-CLASS.md). Short version: create the Granola folder, run `/add-class`, paste the syllabus, commit.
 
@@ -105,7 +109,7 @@ All in `.claude/skills/`. Each is a procedure the agent follows; none holds stat
 |---|---|---|
 | `/add-class` | scaffold a class dir, wire Granola folder, validate | interactive |
 | `/lecture-sync [code]` | file new Granola lectures | scheduled job + interactive |
-| `/blackboard-sync [code]` | pull new assignments/materials from Blackboard; auth via `scripts/bb login` | interactive |
+| `/blackboard-sync [code]` | pull new assignments/materials from Blackboard; auth via `scripts/bb login` | interactive; the scheduled job covers the routine part via `blackboard-scan.py` + `blackboard-mirror.py` |
 | `/assignment-sync [code]` | create Todoist tasks for assignment files that don't have one | interactive |
 | `/digest [days]` | what happened this week, what's due | interactive |
 

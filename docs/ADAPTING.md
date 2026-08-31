@@ -40,7 +40,9 @@ The ping is one `curl` block at the bottom of `scripts/lecture-sync-job.sh`. Rep
 
 ## Another school / another LMS
 
-Blackboard Ultra is Blackboard Ultra everywhere: set `CB_BB_BASE` to your school's domain and the API endpoints in the [blackboard-sync skill](../.claude/skills/blackboard-sync/SKILL.md) should mostly hold. The SSO screens in `blackboard.py` are written for Microsoft Entra (very common) — run `scripts/bb login --headed` once and watch where it gets stuck. Canvas/Moodle/Brightspace: the scan script needs a rewrite against their (friendlier) APIs, but the repo layout, skills, and Todoist sync carry over unchanged.
+Blackboard Ultra is Blackboard Ultra everywhere: set `CB_BB_BASE` to your school's domain and the API endpoints in the [blackboard-sync skill](../.claude/skills/blackboard-sync/SKILL.md) should mostly hold. The SSO screens in `blackboard.py` are written for Microsoft Entra (very common) — run `scripts/bb login --headed` once and watch where it gets stuck. Canvas/Moodle/Brightspace: the scan and mirror scripts need a rewrite against their (friendlier) APIs, but the repo layout, skills, and Todoist sync carry over unchanged.
+
+"Harvey" is TU's name for its Blackboard install, and it shows up in two places worth renaming for another school: `CB_BB_BASE` (the domain) and the `harvey/` mirror folder inside each class workdir. The folder name is a single constant in `scripts/blackboard-mirror.py` (`os.path.join(workdir, "harvey")` in `run_class`), plus prose in `CLAUDE.md`, the blackboard-sync skill, and the placeholder string `Full spec on Harvey (not yet mirrored).` at the top of that script. Nothing else depends on it.
 
 ## Not on macOS
 
@@ -62,3 +64,7 @@ If you want true hands-free sync, put the scheduled job on any always-on machine
 3. The trick that makes this painless is [Tailscale](https://tailscale.com): every device on one private network no matter where you are, so you can ssh into the sync machine from campus wifi to check logs or fix a login. That's how I run mine — the sync lives on an always-on machine at home, my laptop pulls, and my phone gets the ntfy pings.
 
 Unattended runs are where the 1Password **service account** matters (see [OPERATIONS.md](OPERATIONS.md)) — the desktop-app integration only works with you at the keyboard.
+
+## Odds and ends
+
+`scripts/nb-text.py` dumps the visible text of a Mathematica notebook (`.nb`) with no kernel — one line per leaf cell. It's here because some math courses hand out notebooks; if yours don't, delete it. Nothing else in the repo calls it.

@@ -1,8 +1,8 @@
 #!/bin/zsh
 # scheduled sync payload (launchd runs this — see gen-schedule.py). pulls if a
-# remote exists, runs /lecture-sync headless, scans blackboard, syncs todoist,
-# commits, pushes, optionally pings your phone, then regenerates the schedule
-# from class.md so it stays current.
+# remote exists, runs /lecture-sync headless, scans blackboard, refreshes the
+# content mirror, syncs todoist, commits, pushes, optionally pings your phone,
+# then regenerates the schedule from class.md so it stays current.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -48,10 +48,25 @@ if git remote get-url origin >/dev/null 2>&1; then
   fi
 fi
 
+# headless runs never retry a server cached as needs-auth, so one transient 401
+# poisons every later run (the token refresh actually works fine headless).
+# scrub granola from the cache so each run gets a real connection attempt.
+/usr/bin/python3 - <<'PY' || true
+import json, os
+p = os.path.expanduser("~/.claude/mcp-needs-auth-cache.json")
+if os.path.exists(p):
+    d = json.load(open(p))
+    if d.pop("granola", None) is not None:
+        json.dump(d, open(p, "w"))
+        print("scrubbed stale granola needs-auth cache entry")
+PY
+
+# allow the claude.ai Granola connector too — it's the fallback the model
+# reaches for when the local granola server is unavailable
 "$CLAUDE" -p "/lecture-sync" \
   --model opus \
   --permission-mode acceptEdits \
-  --allowedTools "mcp__granola" &
+  --allowedTools "mcp__granola,mcp__claude_ai_Granola,Bash(git pull:*)" &
 claude_pid=$!
 ( sleep "$SYNC_TIMEOUT"; kill "$claude_pid" 2>/dev/null ) &
 watchdog=$!
@@ -62,6 +77,20 @@ kill "$watchdog" 2>/dev/null || true
 # worth running even if the lecture run died; it's a separate source
 /usr/bin/python3 scripts/blackboard-scan.py --skip-todoist || echo "blackboard scan failed"
 
+# mirror every class's blackboard content into its workdir. the files land
+# outside the repo; the only repo output is .bb-mirror.json and any spec text it
+# fills in, so it has to land before the commit below
+/usr/bin/python3 scripts/blackboard-mirror.py || echo "blackboard mirror failed"
+
+# keep the workdir copies of the rulebook fresh. class-folder claude sessions
+# import _course-brain-rules.md relatively (imports can't reach outside the
+# project dir), so each workdir and the semester root carry a synced copy
+grep -h '^workdir:' classes/*/class.md | sed 's/^workdir: *"\{0,1\}//; s/"\{0,1\} *$//' | while IFS= read -r wd; do
+  [ -d "$wd" ] && cp CLAUDE.md "$wd/_course-brain-rules.md"
+  sem=$(dirname "$wd")
+  [ -d "$sem" ] && cp CLAUDE.md "$sem/_course-brain-rules.md"
+done 2>/dev/null || echo "rulebook copy failed"
+
 # after the scan so new assignment files get tasks in the same run
 /usr/bin/python3 scripts/todoist-sync.py || echo "todoist sync failed"
 
@@ -71,7 +100,8 @@ else
   # a failed claude run can leave half-written lecture files; stage only the
   # scan and todoist outputs, lectures stay uncommitted until the next good run
   # (per-spec, guarded: git add fatals on any pathspec matching nothing)
-  for spec in 'classes/*/assignments/*' 'classes/*/.bb-manifest.json' inbox; do
+  for spec in 'classes/*/assignments/*' 'classes/*/.bb-manifest.json' \
+              'classes/*/.bb-mirror.json' inbox; do
     git add -A -- "$spec" 2>/dev/null || true
   done
 fi
