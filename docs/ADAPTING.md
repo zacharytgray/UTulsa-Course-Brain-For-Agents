@@ -42,7 +42,7 @@ The ping is one `curl` block at the bottom of `scripts/lecture-sync-job.sh`. Rep
 
 Blackboard Ultra is Blackboard Ultra everywhere: set `CB_BB_BASE` to your school's domain and the API endpoints in the [blackboard-sync skill](../.claude/skills/blackboard-sync/SKILL.md) should mostly hold. The SSO screens in `blackboard.py` are written for Microsoft Entra (very common) — run `scripts/bb login --headed` once and watch where it gets stuck. Canvas/Moodle/Brightspace: the scan and mirror scripts need a rewrite against their (friendlier) APIs, but the repo layout, skills, and Todoist sync carry over unchanged.
 
-"Harvey" is TU's name for its Blackboard install, and it shows up in two places worth renaming for another school: `CB_BB_BASE` (the domain) and the `harvey/` mirror folder inside each class workdir. The folder name is a single constant in `scripts/blackboard-mirror.py` (`os.path.join(workdir, "harvey")` in `run_class`), plus prose in `CLAUDE.md`, the blackboard-sync skill, and the placeholder string `Full spec on Harvey (not yet mirrored).` at the top of that script. Nothing else depends on it.
+"Harvey" is TU's name for its Blackboard install, and it shows up in two places worth renaming for another school: `CB_BB_BASE` (the domain) and the `harvey/` mirror folder inside each class workdir. The folder name is a single constant in `scripts/blackboard-mirror.py` (`os.path.join(workdir, "harvey")` in `run_class`), plus prose in `CLAUDE.md`, the blackboard-sync skill, the placeholder string `Full spec on Harvey (not yet mirrored).` at the top of that script, and a `tofile="harvey"` diff label in the review-flag output. Nothing else depends on it.
 
 ## Not on macOS
 

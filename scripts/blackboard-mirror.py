@@ -38,7 +38,10 @@ def h(s):
 def frontmatter(text):
     parts = text.split("---")
     fm = dict(re.findall(r"(?m)^(\w+):\s*(.*)$", parts[1]))
-    return {k: v.strip().strip('"') for k, v in fm.items()}, "---".join(parts[2:]).strip()
+    # drop trailing comments; the class template ships them on workdir and an
+    # unedited one would otherwise read as a real path
+    return ({k: re.sub(r"\s*#.*$", "", v).strip().strip('"') for k, v in fm.items()},
+            "---".join(parts[2:]).strip())
 
 
 def bb(args):
