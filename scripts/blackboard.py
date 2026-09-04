@@ -21,12 +21,18 @@ OP_VAULT = os.environ.get("CB_OP_VAULT", "")  # service accounts need an explici
 
 ME = "/learn/api/v1/users/me"
 LOGIN_DEADLINE_SEC = 120
+OP_TIMEOUT_SEC = 90  # above op's own 60s authorization timeout
 
 
 def op_env():
     # unattended runs need OP_SERVICE_ACCOUNT_TOKEN in the environment;
     # interactively, the 1password desktop-app integration covers `op` without one
-    return os.environ.copy()
+    env = os.environ.copy()
+    if not sys.stdin.isatty():
+        # no tty means nobody can answer a biometric/desktop prompt, so make op
+        # error out instead of waiting on one
+        env.setdefault("OP_BIOMETRIC_UNLOCK_ENABLED", "false")
+    return env
 
 
 def op_bin():
@@ -43,9 +49,19 @@ def op(args):
     if OP_VAULT:
         cmd += ["--vault", OP_VAULT]
     try:
-        r = subprocess.run(cmd + args, capture_output=True, text=True, env=op_env())
+        # in a scheduled run there's no tty: without a timeout a queued
+        # desktop-app auth prompt hangs the job forever
+        r = subprocess.run(cmd + args, capture_output=True, text=True, env=op_env(),
+                           stdin=None if sys.stdin.isatty() else subprocess.DEVNULL,
+                           timeout=OP_TIMEOUT_SEC)
     except FileNotFoundError:
         sys.stderr.write("1password cli not found; install it: brew install 1password-cli\n")
+        sys.exit(1)
+    except subprocess.TimeoutExpired:
+        sys.stderr.write(
+            f"op timed out after {OP_TIMEOUT_SEC}s - no service account token, so it "
+            "fell back to the desktop app and stalled on an auth prompt. set "
+            "OP_SERVICE_ACCOUNT_TOKEN (scheduled runs read ~/.course-brain/env)\n")
         sys.exit(1)
     if r.returncode != 0:
         sys.stderr.write(r.stderr)

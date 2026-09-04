@@ -11,7 +11,7 @@ description: >
 
 Drive the browser to each class's Blackboard page, diff what's posted against what's in the repo, and file anything new.
 
-The scheduled scan (`scripts/blackboard-scan.py`) already handles the gradebook-driven part on its own: new graded assignments get filed, and due dates that moved get fixed. This skill is for the rest — browsing content, downloads, and anything the scan flagged to `inbox/blackboard-review.md` because it wouldn't decide alone.
+The scheduled scan (`scripts/blackboard-scan.py`) already handles the gradebook-driven part on its own: new graded assignments get filed, and due dates that moved get fixed. With the poll job installed it runs every 30 minutes, so use this skill when you need a look right now. This skill is for the rest — browsing content, downloads, and anything the scan flagged to `inbox/blackboard-review.md` because it wouldn't decide alone.
 
 > Blackboard's layout varies by course and instructor. The navigation steps below are a starting procedure — adjust them once you've seen your real course pages, then update this file.
 
@@ -87,8 +87,11 @@ shows the semester you want, it can default to the wrong one.
 **Gradebook gotchas.** `dueDate` is UTC — convert to America/Chicago (`04:59Z` in summer,
 `05:59Z` in winter both mean 23:59 the previous local day). Dedupe columns by `name`: stale
 duplicates with old dates hang around, so keep the one whose due date falls inside the semester.
-Skip Attendance and Overall Grade — they aren't assignments. Knowledge Checks are
-tracked only when `possible` > 0 (a few carry extra credit); zero-point ones are skipped.
+Skip Attendance and Overall Grade, and only those two. The match is on the whole column name,
+because "Session 5 - Attendance" is a real graded assignment. Zero-point columns count too; a
+knowledge check worth nothing still tells you what to study. A graded column with **no** due
+date is flagged to `inbox/blackboard-review.md` rather than filed, since only the user can say
+what deadline it should carry.
 
 **Discussion boards (verified 2026-08-27).** Harvey's discussions are classic
 Original-view boards even though the course shell is Ultra — the JSON discussion endpoints
@@ -104,6 +107,20 @@ Original-view boards even though the course shell is Ultra — the JSON discussi
    - `.../do/message?action=message_frame&course_id=<cid>&forum_id=<fid>&message_id=<mid>` — one post's body HTML
    Plain cookie-carrying GETs are enough; no real browser needed. (`action=collect` needs
    POSTed ids — skip it.) Reading a post does bump its view counter; that's the only side effect.
+
+`blackboard-scan.py` classifies discussions this way on its own, never by a "Discussion:" title
+prefix, since plenty of discussions don't carry one. A gradebook column's `contentId` usually
+points straight at the `resource/x-bb-forumlink` item (which is *not* in the content tree, so it
+gets fetched by id and cached under `links` in `.bb-manifest.json`); when it points at a
+courselink instead, the `linkSourceId` is followed one hop. A forum column's stored due time is
+its creation stamp rather than the real deadline, so the scan uses 23:59 on the gradebook's date
+and never rewrites an existing discussion file's `due:`. If the class sets
+`discussion_initial_post: <weekday>` in `class.md`, a new discussion is filed as a pair:
+`Discussion: <topic>` due 23:59 that weekday, `Discussion Reply: <topic>` on the deadline. Without
+that line it's a single file. Existing files are left alone either way.
+
+Run `python3 scripts/blackboard-scan.py <code> --dry-run` to see what a scan would file, including
+a rundown of every detected discussion and the titles it would generate. Nothing is written.
 
 **Caveat.** `scripts/bb get` wraps these once a state file exists. In the in-app Browser pane,
 same-origin `fetch`/XHR *sometimes* works — but script-context requests can lose session cookies

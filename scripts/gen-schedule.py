@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-# regenerate the launchd schedule from class.md schedules.
+# regenerate the launchd jobs: the class-driven lecture sync, and the fixed
+# 30-min blackboard poll (--no-poll skips and removes that one).
 # each class meeting adds a sync run 30 min after the class ends, plus a
 # weekday 07:05 refresh run so schedule changes propagate on their own.
 # the job script re-runs this after every sync, so editing a class.md
@@ -14,10 +15,17 @@ from datetime import date
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-LABEL = "com.course-brain.lecture-sync"
-PLIST = Path.home() / "Library/LaunchAgents" / f"{LABEL}.plist"
-JOB = REPO / "scripts" / "lecture-sync-job.sh"
+AGENTS = Path.home() / "Library/LaunchAgents"
 LOG_DIR = Path.home() / "Library/Logs/course-brain"
+
+LABEL = "com.course-brain.lecture-sync"
+PLIST = AGENTS / f"{LABEL}.plist"
+JOB = REPO / "scripts" / "lecture-sync-job.sh"
+
+POLL_LABEL = "com.course-brain.blackboard-poll"
+POLL_PLIST = AGENTS / f"{POLL_LABEL}.plist"
+POLL_JOB = REPO / "scripts" / "blackboard-poll-job.sh"
+POLL_INTERVAL = 1800
 
 # launchd weekday: 1=Mon .. 5=Fri. R is thursday.
 DAY = {"M": 1, "T": 2, "W": 3, "R": 4, "F": 5}
@@ -99,42 +107,77 @@ def entries():
     return sorted(out)
 
 
-def main():
-    dry = "--dry-run" in sys.argv
-    cal = [{"Weekday": w, "Hour": h, "Minute": m} for w, h, m in entries()]
-    if dry:
-        for e in cal:
-            print(f"weekday {e['Weekday']} at {e['Hour']:02d}:{e['Minute']:02d}")
-        print(f"{len(cal)} run times (dry run, nothing installed)")
-        return
-    plist = {
-        "Label": LABEL,
-        "ProgramArguments": ["/bin/zsh", str(JOB)],
-        "StartCalendarInterval": cal,
+def job_plist(label, job, extra):
+    p = {
+        "Label": label,
+        "ProgramArguments": ["/bin/zsh", str(job)],
         "RunAtLoad": False,
+        # launchd agents default to OFF, and a cloud-synced workdir whose files
+        # aren't downloaded yet then returns EDEADLK
+        "MaterializeDatalessFiles": True,
         "StandardOutPath": str(LOG_DIR / "launchd.log"),
         "StandardErrorPath": str(LOG_DIR / "launchd.log"),
     }
+    p.update(extra)
+    return p
+
+
+def uid():
+    return subprocess.run(["id", "-u"], capture_output=True, text=True).stdout.strip()
+
+
+def install(label, path, plist, what):
     data = plistlib.dumps(plist)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    if PLIST.exists() and PLIST.read_bytes() == data:
-        print(f"schedule unchanged ({len(cal)} run times)")
+    if path.exists() and path.read_bytes() == data:
+        print(f"{label} unchanged ({what})")
         return
-    PLIST.parent.mkdir(parents=True, exist_ok=True)
-    PLIST.write_bytes(data)
-    uid = subprocess.run(["id", "-u"], capture_output=True, text=True).stdout.strip()
-    reload_cmd = (f"launchctl bootout gui/{uid}/{LABEL} 2>/dev/null; "
-                  f"launchctl bootstrap gui/{uid} '{PLIST}' || launchctl load '{PLIST}'")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    reload_cmd = (f"launchctl bootout gui/{uid()}/{label} 2>/dev/null; "
+                  f"launchctl bootstrap gui/{uid()} '{path}' || launchctl load '{path}'")
     if os.environ.get("COURSE_BRAIN_FROM_JOB"):
         # we're running inside the service we'd be booting out — bootout would
         # kill us mid-flight. hand the reload to a detached process instead.
         subprocess.Popen(["/bin/zsh", "-c", f"sleep 5; {reload_cmd}"],
                          start_new_session=True,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        print(f"{len(cal)} run times -> {PLIST}; reload handed to detached process")
+        print(f"{what} -> {path}; reload handed to detached process")
     else:
         subprocess.run(["/bin/zsh", "-c", reload_cmd], check=True)
-        print(f"installed {len(cal)} run times -> {PLIST}")
+        print(f"installed {what} -> {path}")
+
+
+def uninstall(label, path):
+    if not path.exists():
+        return
+    subprocess.run(["/bin/zsh", "-c", f"launchctl bootout gui/{uid()}/{label} 2>/dev/null; true"])
+    path.unlink()
+    print(f"removed {label}")
+
+
+def main():
+    dry = "--dry-run" in sys.argv
+    poll = "--no-poll" not in sys.argv
+    cal = [{"Weekday": w, "Hour": h, "Minute": m} for w, h, m in entries()]
+    lecture = job_plist(LABEL, JOB, {"StartCalendarInterval": cal})
+    # fixed interval, no calendar: the poll gates its own hours in the script
+    poll_plist_data = job_plist(POLL_LABEL, POLL_JOB, {"StartInterval": POLL_INTERVAL})
+    if dry:
+        for e in cal:
+            print(f"weekday {e['Weekday']} at {e['Hour']:02d}:{e['Minute']:02d}")
+        print(f"{len(cal)} {LABEL} run times" + (
+            f", plus {POLL_LABEL} every {POLL_INTERVAL // 60} min" if poll else
+            ", no blackboard poll") + " (dry run, nothing installed)")
+        print(f"  {LABEL}: /bin/zsh {JOB}")
+        if poll:
+            print(f"  {POLL_LABEL}: /bin/zsh {POLL_JOB}")
+        return
+    install(LABEL, PLIST, lecture, f"{len(cal)} run times")
+    if poll:
+        install(POLL_LABEL, POLL_PLIST, poll_plist_data, f"every {POLL_INTERVAL // 60} min")
+    else:
+        uninstall(POLL_LABEL, POLL_PLIST)
 
 
 if __name__ == "__main__":

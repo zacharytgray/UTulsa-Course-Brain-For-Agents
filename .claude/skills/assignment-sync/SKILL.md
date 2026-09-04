@@ -30,9 +30,10 @@ Turn assignment files into Todoist tasks. Idempotent — the task id lives in th
    - project: the class's `todoist_project`
    - description: the repo path of the assignment file on line 1, a `Due: <date> [time]`
      line from the frontmatter, then the file's body (the
-     spec). **Machine-owned, and so is the task's due date** — every sync overwrites both from
-     the file, so the phone app always shows the current spec and a deadline moved in the file
-     (or in Blackboard, via the scan) reaches the task. A date changed by hand in Todoist snaps
+     spec). **Machine-owned, and so are the task's due date and title** — every sync overwrites
+     all three from the file, so the phone app always shows the current spec and a deadline
+     moved in the file (or in Blackboard, via the scan) reaches the task, as does a retitled
+     assignment file. A date changed by hand in Todoist snaps
      back; the file is the only place to move a deadline. Your own notes live in task
      *comments*, which sync never overwrites or deletes.
 5. The script writes ids back itself (`todoist_task_id:` line only). Commit the id changes.

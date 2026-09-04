@@ -21,6 +21,8 @@ This is the ingestion process for a new course. Do it once per class, ideally th
 
    Schedule format: days `MTWRF` (R = Thursday), 24-hour times, `MWF 10:00–10:50`. Several segments are fine: `TR 13:00-14:15, F 9:00-9:50`.
 
+   If the class requires an initial discussion post before the reply deadline, set `discussion_initial_post:` to that weekday (e.g. `friday`). Each discussion is then filed as two assignments instead of one; leave it empty otherwise.
+
    The copied `assignments/_template.md` and `materials/README.md` are references; every skill and `check.py` skips them, so leave them or delete them. `workdir-CLAUDE.md` and `semester-workdir-CLAUDE.md` come along too — they belong in the workdir, not the class dir (step 3), so delete them from the copy once you've placed them.
 
 3. **(you) Syllabus.** Paste it into `classes/<class>/syllabus.md`. The original PDF goes in
@@ -46,7 +48,7 @@ That's it. From then on:
 ## What happens automatically
 
 - **You hit record in Granola at the start of each lecture**, inside the class folder (or move the note into it afterward). Recording is manual-start; nothing auto-starts.
-- **30 minutes after the class ends**, the scheduled job runs `/lecture-sync`, files the transcript at `classes/<class>/lectures/YYYY-MM-DD.md`, and commits.
+- **30 minutes after the class ends**, the scheduled job runs `/lecture-sync`, files the transcript at `classes/<class>/lectures/YYYY-MM-DD.md`, and commits. If the Blackboard poll job is installed, it checks Blackboard every 30 minutes in between.
 - Summaries at the top, full transcript below `## Transcript`.
 
 ## First-week checks

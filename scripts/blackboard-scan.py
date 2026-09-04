@@ -10,7 +10,7 @@ import os
 import re
 import subprocess
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -18,6 +18,11 @@ LOCAL = ZoneInfo("America/Chicago")
 SUMMARY = "/tmp/course-brain-scan-summary"
 REVIEW = "inbox/blackboard-review.md"
 SKIP = ("attendance", "overall grade")
+FORUM = "resource/x-bb-forumlink"
+COURSELINK = "resource/x-bb-courselink"
+# strips the prefix off a blackboard title so pair titles never double it
+DISC_PREFIX = re.compile(r"(?i)^\s*discussion(?:\s+reply)?\s*:\s*")
+WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 
 REVIEW_HEADER = """# Blackboard review
 
@@ -69,6 +74,51 @@ def local_due(iso):
     return dt.astimezone(LOCAL).strftime("%Y-%m-%dT%H:%M")
 
 
+def link_info(cid, content_id, items, cache):
+    # (contentHandler, courselink target). forum items live outside the ultra
+    # tree and gradebook columns point straight at them, so anything missing
+    # gets fetched by id - cached in the manifest, one request per id ever
+    if not content_id:
+        return "", ""
+    item = items.get(content_id)
+    if item is None:
+        if content_id not in cache:
+            try:
+                item = bb_get(f"/learn/api/v1/courses/{cid}/contents/{content_id}")
+            except Exception:
+                item = {}
+            detail = (item.get("contentDetail") or {}).get(COURSELINK) or {}
+            cache[content_id] = [item.get("contentHandler") or "",
+                                 detail.get("linkSourceId") or ""]
+        return tuple(cache[content_id])
+    detail = (item.get("contentDetail") or {}).get(COURSELINK) or {}
+    return item.get("contentHandler") or "", detail.get("linkSourceId") or ""
+
+
+def is_discussion(cid, content_id, items, cache):
+    # by type, never by title - plenty of discussions carry no "Discussion:" prefix
+    handler, target = link_info(cid, content_id, items, cache)
+    if handler == COURSELINK and target:
+        handler, _ = link_info(cid, target, items, cache)
+    return handler == FORUM
+
+
+def topic(name):
+    return DISC_PREFIX.sub("", name).strip()
+
+
+def weekday_before(due, day):
+    # the initial post is due on the named weekday ahead of the reply deadline
+    d = date.fromisoformat(due[:10])
+    return (d - timedelta(days=((d.weekday() - WEEKDAYS.index(day)) % 7) or 7)).isoformat()
+
+
+def initial_post_day(cfm):
+    # opt-in per class: "discussion_initial_post: friday" in class.md frontmatter
+    day = cfm.get("discussion_initial_post", "").split("#")[0].strip().lower()
+    return day if day in WEEKDAYS else ""
+
+
 def due_matches(existing, incoming):
     if not existing:
         return False
@@ -93,7 +143,9 @@ def match_files(cdir, name):
         return []
     titles = {}
     for f in sorted(glob.glob(f"{cdir}/assignments/*.md")):
-        if f.endswith("_template.md"):
+        # the initial-post half of a discussion pair has no gradebook column of
+        # its own; letting it match would push the reply due date onto it
+        if f.endswith("_template.md") or f.endswith("-initial-post.md"):
             continue
         fm, _ = frontmatter(open(f).read())
         t = norm(fm.get("title", ""))
@@ -122,13 +174,44 @@ def context_line(items, content_id):
     return f"{top}, under {parent}." if len(ancestors) > 1 else f"{top}."
 
 
-def write_file(path, name, due, posted, source, context):
+def write_file(path, name, due, posted, source, body):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     name = name.replace('"', "'")  # a double quote would break the frontmatter
     fm = ["---", f'title: "{name}"', f"due: {due}", f"posted: {posted}".rstrip(),
           f'source: "{source}"', "status: open", 'todoist_task_id: ""', "---", ""]
-    body = ([context] if context else []) + ["Full spec on Harvey (not yet mirrored)."]
     open(path, "w").write("\n".join(fm + body) + "\n")
+
+
+def write_pair(cdir, name, due, posted, source, context, day, dry):
+    # classes that want an initial post ahead of the reply deadline get two
+    # files; set discussion_initial_post in class.md to turn this on
+    base = slug(name)
+    reply = f"{cdir}/assignments/{base}.md"
+    initial = f"{cdir}/assignments/{base}-initial-post.md"
+    t = topic(name)
+    first = weekday_before(due, day)
+    rule = (f"discussions need an initial post by the {day.capitalize()} before the "
+            "reply deadline")
+    made = []
+    if not os.path.exists(reply):
+        body = ([context] if context else []) + [
+            "Full spec on Harvey (not yet mirrored).",
+            "",
+            f"Initial post due {day.capitalize()} {first} ({rule}).",
+            "",
+            f"Initial post tracked separately in `{os.path.basename(initial)}`.",
+        ]
+        if not dry:
+            write_file(reply, f"Discussion Reply: {t}", due, posted, source, body)
+        made.append(reply)
+    if not os.path.exists(initial):
+        body = [f"Initial post for the discussion tracked in `{os.path.basename(reply)}` "
+                "(full deadline later).",
+                f"Per the class's deadline rules: {rule}."]
+        if not dry:
+            write_file(initial, f"Discussion: {t}", f"{first}T23:59", posted, source, body)
+        made.append(initial)
+    return made
 
 
 def set_due(path, due):
@@ -145,13 +228,17 @@ def add_review(code, short, name, due, points, paths, lead):
              f'{points if points is not None else "unknown"} points.',
              "", lead]
     lines += [f"- `{p}`" for p in paths]
-    lines += ["", "Options: match it to one of the files above and update that file's "
-              f"`due:` to `{due}`, or create a new assignment file for it."]
+    if due:
+        lines += ["", "Options: match it to one of the files above and update that file's "
+                  f"`due:` to `{due}`, or create a new assignment file for it."]
+    else:
+        lines += ["", "Options: create an assignment file for it with a due date of your "
+                  "choosing, or ignore the column."]
     with open(REVIEW, "a") as f:
         f.write("\n".join(lines) + "\n")
 
 
-def write_manifest(cdir, columns, contents):
+def write_manifest(cdir, columns, contents, links):
     manifest = {
         "columns": {c["id"]: {"name": col_name(c), "dueDate": c.get("dueDate"),
                               "possible": c.get("possible"), "contentId": c.get("contentId")}
@@ -159,6 +246,7 @@ def write_manifest(cdir, columns, contents):
         "contents": {i["id"]: {"title": i.get("title"), "parentId": i.get("parentId"),
                                "contentHandler": i.get("contentHandler")}
                      for i in contents},
+        "links": links,
     }
     path = f"{cdir}/.bb-manifest.json"
     text = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
@@ -167,18 +255,20 @@ def write_manifest(cdir, columns, contents):
     open(path, "w").write(text)
 
 
-def scan(code, cdir, cfm, columns, contents):
+def scan(code, cdir, cfm, cid, columns, contents, dry=False):
     prev = None
     mpath = f"{cdir}/.bb-manifest.json"
     if os.path.exists(mpath):
         prev = json.load(open(mpath))
     known = set((prev or {}).get("columns", {}))
+    links = dict((prev or {}).get("links", {}))
     items = {i["id"]: i for i in contents}
+    day = initial_post_day(cfm)
 
-    wanted = [c for c in columns
-              if col_name(c) and not any(s in col_name(c).lower() for s in SKIP)
-              # zero-point knowledge checks aren't tracked; the few with extra credit are
-              and not ("knowledge check" in col_name(c).lower() and not c.get("possible"))]
+    # whole-name match only - a column like "Session 5 - Attendance" is a real
+    # assignment, and a zero-point knowledge check is still worth tracking
+    skip = {norm(s) for s in SKIP}
+    wanted = [c for c in columns if col_name(c) and norm(col_name(c)) not in skip]
     by_name = {}
     for c in wanted:
         by_name.setdefault(norm(col_name(c)), []).append(c)
@@ -187,17 +277,33 @@ def scan(code, cdir, cfm, columns, contents):
     ends = cfm.get("ends", "").split("#")[0].strip()
 
     res = {"new": 0, "updated": 0, "flagged": 0, "notes": [], "content": [],
-           "baseline": prev is None}
+           "baseline": prev is None, "discussions": [], "links": links}
     for cols in by_name.values():
         col = cols[0] if len(cols) == 1 else keep(cols, starts, ends)
         name = col_name(col)
         due = local_due(col["dueDate"]) if col.get("dueDate") else ""
+        item = items.get(col.get("contentId")) or {}
+        disc = bool(due) and is_discussion(cid, col.get("contentId"), items, links)
+        if disc:
+            # a forum item's gradebook time is a creation stamp, not the deadline
+            due = f"{due[:10]}T23:59"
+            base = f"{cdir}/assignments/{slug(name)}"
+            d = {"name": name, "due": due, "pair": bool(day),
+                 "file": f"{base}.md"}
+            if day:
+                d.update({"initial": weekday_before(due, day),
+                          "initial_title": f"Discussion: {topic(name)}",
+                          "reply_title": f"Discussion Reply: {topic(name)}",
+                          "initial_file": f"{base}-initial-post.md"})
+            res["discussions"].append(d)
         hits = match_files(cdir, name)
 
         if len(hits) == 1:
             fm, _ = frontmatter(open(hits[0]).read())
-            if due and not due_matches(fm.get("due", ""), due):
-                set_due(hits[0], due)
+            # discussions own their own time, so the gradebook never moves them
+            if due and not disc and not due_matches(fm.get("due", ""), due):
+                if not dry:
+                    set_due(hits[0], due)
                 res["updated"] += 1
                 res["notes"].append(f"due {due} → {os.path.basename(hits[0])}")
             continue
@@ -206,28 +312,46 @@ def scan(code, cdir, cfm, columns, contents):
             continue
 
         if len(hits) > 1:
-            add_review(code, f'"{name}" matches more than one file', name, due,
-                       col.get("possible"), hits,
-                       "It matches more than one assignment file already in the repo:")
+            if not dry:
+                add_review(code, f'"{name}" matches more than one file', name, due,
+                           col.get("possible"), hits,
+                           "It matches more than one assignment file already in the repo:")
             res["flagged"] += 1
             continue
 
         if not due:
-            res["notes"].append(f'new graded column with no due date: "{name}"')
-            continue
-
-        path = f"{cdir}/assignments/{slug(name)}.md"
-        if os.path.exists(path):
-            add_review(code, f'"{name}" collides with an existing file', name, due,
-                       col.get("possible"), [path],
-                       "Its slug is already taken, but the titles don't match:")
+            # participation columns get made mid-session with no date; flag once
+            # so it reaches a decision instead of dropping into the summary
+            if not dry:
+                add_review(code, f'"{name}" has no due date', name, due,
+                           col.get("possible"), [],
+                           "It's graded but has no due date on Blackboard, so the scan "
+                           "can't file it on its own.")
             res["flagged"] += 1
             continue
 
-        item = items.get(col.get("contentId")) or {}
+        path = f"{cdir}/assignments/{slug(name)}.md"
         posted = (item.get("created") or item.get("createdDate") or "")[:10]
-        write_file(path, name, due, posted, cfm.get("blackboard_url", ""),
-                   context_line(items, col.get("contentId")))
+        context = context_line(items, col.get("contentId"))
+        source = cfm.get("blackboard_url", "")
+
+        if disc and day:
+            for made in write_pair(cdir, name, due, posted, source, context, day, dry):
+                res["new"] += 1
+                res["notes"].append(f"new {os.path.basename(made)}")
+            continue
+
+        if os.path.exists(path):
+            if not dry:
+                add_review(code, f'"{name}" collides with an existing file', name, due,
+                           col.get("possible"), [path],
+                           "Its slug is already taken, but the titles don't match:")
+            res["flagged"] += 1
+            continue
+
+        if not dry:
+            write_file(path, name, due, posted, source,
+                       ([context] if context else []) + ["Full spec on Harvey (not yet mirrored)."])
         res["new"] += 1
         res["notes"].append(f"new {os.path.basename(path)} (due {due})")
 
@@ -241,6 +365,7 @@ def main():
     os.chdir(REPO)
     argv = sys.argv[1:]
     skip_todoist = "--skip-todoist" in argv
+    dry = "--dry-run" in argv
     only = next((a.lower() for a in argv if not a.startswith("--")), None)
 
     new = updated = flagged = 0
@@ -266,8 +391,23 @@ def main():
             failures.append(f"{code}: fetch failed, skipped")
             continue
 
-        res = scan(code, cdir, cfm, columns, contents)
-        write_manifest(cdir, columns, contents)
+        res = scan(code, cdir, cfm, m.group(0), columns, contents, dry)
+        if not dry:
+            write_manifest(cdir, columns, contents, res["links"])
+        # the discussion rundown is dry-run only; the job summary stays terse
+        for d in res["discussions"] if dry else []:
+            if d["pair"]:
+                state = ("pair on disk" if os.path.exists(d["initial_file"])
+                         and os.path.exists(d["file"]) else "pair incomplete")
+                lines.append(f'{code}: discussion "{d["name"]}" ({state}) → '
+                             f'"{d["initial_title"]}" {d["initial"]}T23:59 in '
+                             f'{os.path.basename(d["initial_file"])}; '
+                             f'"{d["reply_title"]}" {d["due"]} in '
+                             f'{os.path.basename(d["file"])}')
+            else:
+                state = "on disk" if os.path.exists(d["file"]) else "not filed"
+                lines.append(f'{code}: discussion "{d["name"]}" ({state}) → '
+                             f'{d["due"]} in {os.path.basename(d["file"])}')
         new += res["new"]
         updated += res["updated"]
         flagged += res["flagged"]
@@ -282,16 +422,18 @@ def main():
         if notes:
             lines.append(f"{code}: " + "; ".join(notes))
 
+    verb = " would be" if dry else ""
     head = "Blackboard scan: no changes" if not (new or updated or flagged) else (
-        f"Blackboard scan: {new} new, {updated} due updates, {flagged} flagged")
+        f"Blackboard scan:{verb} {new} new, {updated} due updates, {flagged} flagged")
     out = [head] + lines + failures
     if flagged:
         out.append(f"Review flags await a decision — see {REVIEW}")
     text = "\n".join(out) + "\n"
-    open(SUMMARY, "w").write(text)
+    if not dry:
+        open(SUMMARY, "w").write(text)
     print(text, end="")
 
-    if (new or updated) and not skip_todoist:
+    if (new or updated) and not skip_todoist and not dry:
         subprocess.run([sys.executable, "scripts/todoist-sync.py"])
     return 1 if failures else 0
 

@@ -21,6 +21,7 @@ frontmatter = gen_schedule.frontmatter
 
 STATUSES = {"open", "submitted", "graded"}
 ROLES = {"student", "ta"}
+WEEKDAYS = {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}
 ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 TRANSCRIPT = re.compile(r"^## Transcript\s*$", re.M)
 
@@ -90,6 +91,9 @@ def check_class(md, rel):
         bad(rel, f"role '{role}' is not one of {'/'.join(sorted(ROLES))}")
     if not fm.get("granola_folder_id"):
         warn(rel, "granola_folder_id is empty; lecture-sync will try to match by title")
+    day = fm.get("discussion_initial_post", "")
+    if day and day.lower() not in WEEKDAYS:
+        bad(rel, f"discussion_initial_post '{day}' is not a weekday name")
     return code
 
 
@@ -155,6 +159,14 @@ def main():
             if a.name == "_template.md":
                 continue
             check_assignment(a, a.relative_to(repo))
+
+    # a conflicted file would otherwise lint clean and get auto-committed by the
+    # scheduled job
+    for md_file in sorted(list((repo / "classes").rglob("*.md")) + list((repo / "inbox").glob("*.md"))):
+        for n, line in enumerate(md_file.read_text().splitlines(), 1):
+            if line.startswith(("<<<<<<< ", ">>>>>>> ")):
+                bad(md_file.relative_to(repo), f"line {n}: merge conflict marker")
+                break
 
     inbox = repo / "inbox"
     if inbox.is_dir():

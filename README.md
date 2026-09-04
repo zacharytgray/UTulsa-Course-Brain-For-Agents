@@ -79,7 +79,7 @@ If you use the same tools I do: clone, configure, done. If you don't: the docs a
 1. **Clone this repo** (or fork it first — you'll be committing your own class content, so make your copy **private**).
 2. Open it in Claude Code and say **"add my class"** — the `/add-class` skill walks you through one course: code, schedule, Harvey url. Repeat per class.
 3. **Wire up what you use.** Granola: create a folder per class, one-time MCP auth. Todoist: drop your API token in `~/.config/todoist/token`. Harvey: put your TU login in a 1Password item and run `scripts/bb login` once. Each step is optional — the repo degrades gracefully to whatever you've connected.
-4. **Schedule it** (optional, macOS): `python3 scripts/gen-schedule.py` installs a launchd job that syncs lectures and scans Harvey after each class. Runs fine on the laptop you already own; an always-on machine is nicer but not required.
+4. **Schedule it** (optional, macOS): `python3 scripts/gen-schedule.py` installs two launchd jobs, one that syncs lectures and scans Harvey after each class, and one that polls Harvey every 30 minutes during the day (`--no-poll` skips that one). Runs fine on the laptop you already own; an always-on machine is nicer but not required.
 5. Hit record in Granola when class starts, and ask your agent for help like it's a classmate who never misses a lecture.
 
 Details: [docs/ADDING-A-CLASS.md](docs/ADDING-A-CLASS.md) for setup, [docs/OPERATIONS.md](docs/OPERATIONS.md) for the runbook, [docs/VISION.md](docs/VISION.md) for the design and why it's markdown-first, [docs/ADAPTING.md](docs/ADAPTING.md) for making it yours.

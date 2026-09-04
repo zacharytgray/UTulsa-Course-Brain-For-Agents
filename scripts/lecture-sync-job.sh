@@ -33,10 +33,20 @@ fi
 echo $$ > "$LOCK/pid"
 trap 'rm -rf "$LOCK"' EXIT
 
+# a poll run may be mid-flight; give it up to 5 min to finish before we pull
+POLLLOCK="/tmp/course-brain-poll.lock"
+waited=0
+while pollpid=$(cat "$POLLLOCK/pid" 2>/dev/null) && [ -n "$pollpid" ] && kill -0 "$pollpid" 2>/dev/null; do
+  if [ "$waited" -ge 300 ]; then
+    echo "poll job still running (pid $pollpid) after 5 min, proceeding"
+    break
+  fi
+  sleep 10
+  waited=$((waited + 10))
+done
+
 cd "$REPO"
-has_remote=0
 if git remote get-url origin >/dev/null 2>&1; then
-  has_remote=1
   # autostash: a failed claude run can leave dirty files (they commit next
   # successful run); without it every later pull would die on the dirty tree.
   # on a rebase conflict (flags got processed elsewhere while a run was
@@ -74,104 +84,11 @@ sync_ok=1
 wait "$claude_pid" || { sync_ok=0; echo "claude run failed or timed out"; }
 kill "$watchdog" 2>/dev/null || true
 
-# worth running even if the lecture run died; it's a separate source
-/usr/bin/python3 scripts/blackboard-scan.py --skip-todoist || echo "blackboard scan failed"
-
-# mirror every class's blackboard content into its workdir. the files land
-# outside the repo; the only repo output is .bb-mirror.json and any spec text it
-# fills in, so it has to land before the commit below
-/usr/bin/python3 scripts/blackboard-mirror.py || echo "blackboard mirror failed"
-
-# keep the workdir copies of the rulebook fresh. class-folder claude sessions
-# import _course-brain-rules.md relatively (imports can't reach outside the
-# project dir), so each workdir and the semester root carry a synced copy
-grep -h '^workdir:' classes/*/class.md \
-  | sed 's/^workdir: *//; s/[[:space:]]*#.*$//; s/^"//; s/"$//' \
-  | while IFS= read -r wd; do
-  # a class whose workdir isn't filled in yet leaves wd empty, and dirname ""
-  # is "." - without this the rulebook lands in the repo root and gets committed
-  [ -n "$wd" ] || continue
-  [ -d "$wd" ] && cp CLAUDE.md "$wd/_course-brain-rules.md"
-  sem=$(dirname "$wd")
-  [ -d "$sem" ] && cp CLAUDE.md "$sem/_course-brain-rules.md"
-done 2>/dev/null || echo "rulebook copy failed"
-
-# after the scan so new assignment files get tasks in the same run
-/usr/bin/python3 scripts/todoist-sync.py || echo "todoist sync failed"
-
-if [ "$sync_ok" = 1 ]; then
-  git add -A
-else
-  # a failed claude run can leave half-written lecture files; stage only the
-  # scan and todoist outputs, lectures stay uncommitted until the next good run
-  # (per-spec, guarded: git add fatals on any pathspec matching nothing)
-  for spec in 'classes/*/assignments/*' 'classes/*/.bb-manifest.json' \
-              'classes/*/.bb-mirror.json' inbox; do
-    git add -A -- "$spec" 2>/dev/null || true
-  done
-fi
-if [ -n "$(git diff --cached --name-only)" ]; then
-  git commit -m "sync: automated run $(date '+%F %H:%M')" --quiet
-  echo "committed $(git diff-tree --no-commit-id --name-only -r HEAD | wc -l | tr -d ' ') file(s)"
-fi
-# push whenever local is ahead, not just when this run committed — a failed
-# push would otherwise strand commits until the next run with new content
-pushed=0
-if [ "$has_remote" = 1 ]; then
-  if [ "$(git rev-parse HEAD)" != "$(git rev-parse '@{u}')" ]; then
-    if git push --quiet; then
-      pushed=1
-      echo "pushed"
-    else
-      echo "push failed"
-    fi
-  else
-    echo "nothing new"
-  fi
-else
-  # no remote: the local repo is the only copy, treat every commit as "pushed"
-  # so the phone ping below still fires
-  pushed=1
-  echo "no remote configured, skipping push"
-fi
-
-COURSE_BRAIN_FROM_JOB=1 /usr/bin/python3 scripts/gen-schedule.py
-
-# optional phone ping via ntfy.sh — put your topic (one line, the topic name or
-# a full url) in ~/.course-brain/ntfy-topic. decision-only: it fires just for
-# review-file entries that haven't been pinged before, so routine syncs stay
-# silent. state file = flag headings already pinged; each flag pings exactly
-# once — removals never ping, and a flag filed on a run whose push failed
-# still pings on the next successful one
-PINGED="$HOME/.course-brain/pinged-flags"
-if [ "$pushed" = 1 ] && [ -f inbox/blackboard-review.md ]; then
-  touch "$PINGED"
-  new_flags=$(grep '^## ' inbox/blackboard-review.md | grep -Fxv -f "$PINGED" || true)
-  if [ -n "$new_flags" ]; then
-    if [ -f "$HOME/.course-brain/ntfy-topic" ]; then
-      topic=$(head -1 "$HOME/.course-brain/ntfy-topic")
-      case "$topic" in
-        http*) url="$topic" ;;
-        *) url="https://ntfy.sh/$topic" ;;
-      esac
-      count=$(printf '%s\n' "$new_flags" | wc -l | tr -d ' ')
-      body=$(printf '%s\n' "$new_flags" | head -12 | sed 's/^## //')
-      if [ "$count" -gt 12 ]; then
-        body="$body
-+$((count - 12)) more"
-      fi
-      body="$body
-Decide via claude.ai/code — \"process the blackboard review file\""
-      if curl -fsS -H "Title: course-brain: decision needed" \
-           -H "Click: https://claude.ai/code" -d "$body" "$url" >/dev/null; then
-        printf '%s\n' "$new_flags" >> "$PINGED"
-      else
-        echo "ntfy ping failed"  # not recorded as pinged; retries next run
-      fi
-    else
-      echo "ntfy topic not configured, skipping ping"
-    fi
-  else
-    echo "no new review flags, no ping"
-  fi
-fi
+# scan, mirror, rulebook copy, todoist, commit, push, schedule, ping — shared
+# with the optional poll job. worth running even if the lecture run died; it's a
+# separate source. forced mirror: the class that just ended is the one with new
+# material
+stage=all
+[ "$sync_ok" = 1 ] || stage=scan
+CB_STAGE="$stage" CB_FORCE_MIRROR=1 CB_LOG="$LOG_DIR/lecture-sync.log" \
+  "$REPO/scripts/blackboard-job.sh"

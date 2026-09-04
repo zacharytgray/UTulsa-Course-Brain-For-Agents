@@ -16,6 +16,7 @@ import re
 import subprocess
 import sys
 from datetime import date
+from html.parser import HTMLParser
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PLACEHOLDER = "Full spec on Harvey (not yet mirrored)."
@@ -111,6 +112,164 @@ def html_to_md(raw):
     return re.sub(r"\n{3,}", "\n\n", s).strip()
 
 
+def squeeze(s):
+    return re.sub(r"[ \t\xa0]+", " ", s).strip()
+
+
+def bbfile_name(attr):
+    # attached-file links are often icon-only, so the visible name lives here
+    try:
+        meta = json.loads(html.unescape(attr or ""))
+    except ValueError:
+        return ""
+    return meta.get("displayName") or meta.get("linkName") or ""
+
+
+class PageMarkdown(HTMLParser):
+    # ultra page bodies are plain html: paragraphs wrapped in layout divs, spans
+    # for colour, links, the odd list or table. html.parser keeps this stdlib -
+    # the script has no third-party deps and shouldn't grow one for this.
+    # html_to_md above stays as-is: it feeds assignment spec text, and retuning
+    # it would churn every spec the mirror has already filled in.
+    BLOCKS = ("p", "div", "section", "article", "blockquote",
+              "h1", "h2", "h3", "h4", "h5", "h6")
+    # a markdown cell is one line, so these only separate text inside one
+    SEPS = BLOCKS + ("br", "hr", "pre", "ul", "ol", "li")
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.lines, self.buf, self.lists, self.links = [], [], [], []
+        self.skip, self.indent = 0, ""
+        self.table = self.row = self.cell = None
+
+    def write(self, s):
+        (self.cell if self.cell is not None else self.buf).append(s)
+
+    def flush(self, blank=False):
+        # indent is set by list items; squeeze would eat it off the front
+        line = squeeze("".join(self.buf))
+        self.buf, indent, self.indent = [], self.indent, ""
+        if line:
+            self.lines.append(indent + line)
+        if blank and self.lines and self.lines[-1]:
+            self.lines.append("")
+
+    def close_row(self):
+        if self.row and any(self.row):
+            self.table.append(self.row)
+        self.row = None
+
+    def emit_table(self, rows):
+        if len(rows) == 1 and len(rows[0]) == 1:
+            self.lines += [rows[0][0], ""]  # a one-cell table is layout, not data
+            return
+        wide = max(len(r) for r in rows)
+        rows = [r + [""] * (wide - len(r)) for r in rows]
+        self.lines += ["| " + " | ".join(rows[0]) + " |", "|" + " --- |" * wide]
+        self.lines += ["| " + " | ".join(r) + " |" for r in rows[1:]] + [""]
+
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        if tag in ("script", "style"):
+            self.skip += 1
+        elif self.skip:
+            return
+        elif self.cell is not None and tag in self.SEPS:
+            self.write(" ")
+        elif tag == "br":
+            self.flush()
+        elif tag == "hr":
+            self.flush(True)
+            self.lines += ["---", ""]
+        elif tag == "pre":
+            # ultra uses these for one-line shell commands, not code blocks
+            self.flush(True)
+            self.write("`")
+        elif tag == "table":
+            self.flush(True)
+            self.table = []
+        elif tag == "tr" and self.table is not None:
+            self.close_row()  # editors leave </tr> off often enough
+            self.row = []
+        elif tag in ("td", "th") and self.row is not None:
+            self.cell = []
+        elif tag in ("ul", "ol"):
+            self.flush(not self.lists)
+            self.lists.append([tag, 0])
+        elif tag == "li":
+            self.flush()
+            kind, n = self.lists[-1] if self.lists else ["ul", 0]
+            if self.lists:
+                self.lists[-1][1] = n = n + 1
+            self.indent = "  " * max(len(self.lists) - 1, 0)
+            self.write(f"{n}. " if kind == "ol" else "- ")
+        elif tag in ("strong", "b"):
+            self.write("**")
+        elif tag in ("em", "i"):
+            self.write("*")
+        elif tag == "a" and a.get("href"):
+            target = self.cell if self.cell is not None else self.buf
+            self.links.append((a["href"], bbfile_name(a.get("data-bbfile")), target, len(target)))
+        elif tag in self.BLOCKS:
+            self.flush(True)
+            if tag[0] == "h" and tag[1:].isdigit():
+                self.write("#" * int(tag[1:]) + " ")
+
+    def handle_endtag(self, tag):
+        if tag in ("script", "style"):
+            self.skip = max(self.skip - 1, 0)
+        elif self.skip:
+            return
+        elif self.cell is not None and tag in self.SEPS:
+            self.write(" ")
+        elif tag in ("td", "th") and self.cell is not None:
+            self.row.append(squeeze("".join(self.cell)).replace("|", r"\|"))
+            self.cell = None
+        elif tag == "tr" and self.row is not None:
+            self.close_row()
+        elif tag == "table" and self.table is not None:
+            self.close_row()
+            if self.table:
+                self.emit_table(self.table)
+            self.table = None
+        elif tag == "pre":
+            self.write("`")
+            self.flush(True)
+        elif tag in ("ul", "ol"):
+            if self.lists:
+                self.lists.pop()
+            self.flush(not self.lists)
+        elif tag == "li":
+            self.flush()
+        elif tag in ("strong", "b"):
+            self.write("**")
+        elif tag in ("em", "i"):
+            self.write("*")
+        elif tag == "a" and self.links:
+            href, name, target, at = self.links.pop()
+            text = squeeze("".join(target[at:])) or name
+            del target[at:]
+            href = html.unescape(href)
+            target.append(f"[{text or href}]({BASE + href if href.startswith('/') else href})")
+        elif tag in self.BLOCKS:
+            self.flush(True)
+
+    def handle_data(self, data):
+        if not self.skip:
+            self.write(data)
+
+    def markdown(self):
+        self.close()
+        self.flush()
+        return re.sub(r"\n{3,}", "\n\n", "\n".join(self.lines)).strip()
+
+
+def page_md(raw):
+    p = PageMarkdown()
+    p.feed(raw or "")
+    return p.markdown()
+
+
 # --- content tree -----------------------------------------------------------
 
 FOLDERS = ("resource/x-bb-folder", "resource/x-bb-lesson")
@@ -186,6 +345,34 @@ def plan(cid, items):
                 rel, n = f"{stem}-{n}{ext}", n + 1
             taken.add(rel)
             out.append((f"{item['id']}::{name}", rel, url, size))
+    return out
+
+
+def plan_pages(items, taken):
+    # an ultra page keeps its html in a child item titled ultraDocumentBody, so
+    # the parent folder is the page: it names the file and holds it. these have
+    # no file to download - without this the text only exists on blackboard.
+    # taken carries plan()'s paths so a page can't land on a downloaded file.
+    # (key, relative path under harvey/, file contents)
+    out, taken = [], set(taken)
+    for item in sorted(items.values(), key=lambda i: i["id"]):
+        if item.get("title") != "ultraDocumentBody":
+            continue
+        md = page_md((item.get("body") or {}).get("rawText") or "")
+        if not md:
+            continue
+        title = html.unescape((items.get(item.get("parentId")) or {}).get("title") or "Page")
+        dirparts = folder_path(items, item)
+        rel = sanitize(title) + ".md"
+        rel = os.path.join(*dirparts, rel) if dirparts else rel
+        stem, n = rel[:-3], 2
+        while rel in taken:
+            rel, n = f"{stem}-{n}.md", n + 1
+        taken.add(rel)
+        out.append((f"page::{item['id']}", rel,
+                    f"<!-- mirrored from blackboard item {item['id']}; harvey/ is "
+                    f"script-owned, edits here get overwritten -->\n\n"
+                    f"# {title}\n\n{md}\n"))
     return out
 
 
@@ -495,7 +682,33 @@ def run_class(code, cdir, cfm, dry):
         if got % 20 == 0:
             save(mpath, manifest)  # flush so a killed run resumes where it stopped
 
-    keep = {k for k, _, _, _ in wanted}
+    # ultra page bodies: rendered from the item's html, otherwise managed like a
+    # download - same manifest, same pruning, same skip-when-unchanged
+    wrote = pskipped = 0
+    pages = plan_pages(items, [rel for _, rel, _, _ in wanted])
+    for key, rel, text in pages:
+        dest = os.path.join(root, rel)
+        prev = files.get(key)
+        if (prev and prev.get("path") == rel and prev.get("hash") == h(text)
+                and os.path.exists(dest) and os.path.getsize(dest) == prev.get("bytes")):
+            pskipped += 1
+            continue
+        if dry:
+            print(f"  + {rel}")
+            wrote += 1
+            continue
+        if prev and prev.get("path") != rel:
+            old = os.path.join(root, prev["path"])
+            if os.path.exists(old):
+                os.remove(old)  # renamed or moved in blackboard's tree
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        open(dest, "w").write(text)
+        files[key] = {"path": rel, "page": True, "hash": h(text),
+                      "bytes": os.path.getsize(dest),
+                      "mirrored_at": date.today().isoformat()}
+        wrote += 1
+
+    keep = {k for k, _, _, _ in wanted} | {k for k, _, _ in pages}
     if not items and files:
         # an empty tree on a live session is blackboard glitching, not the
         # course being emptied - pruning here would wipe the whole mirror
@@ -527,6 +740,7 @@ def run_class(code, cdir, cfm, dry):
 
     print(f"{code}: {got} downloaded, {skipped} skipped, {pruned} pruned, {failed} failed, "
           f"dead links: {ndead}, {nbytes / 1e6:.1f} MB; "
+          f"pages {wrote} written / {pskipped} skipped; "
           f"specs {len(filled)} filled / {len(respecced)} updated / {len(flagged)} flagged "
           f"/ {len(unfilled)} no text; "
           f"tests {len(mirrored)} mirrored / {len(blocked)} inaccessible")

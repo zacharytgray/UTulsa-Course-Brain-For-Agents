@@ -37,13 +37,13 @@ Todoist (one project per class, or one School project)
 
 ### Hands-free sync
 
-The scheduled job runs `/lecture-sync` 30 minutes after each class ends, on a launchd schedule generated from every class's `schedule:` line, and commits (and pushes, if the repo has a remote). It's self-updating: change a class's schedule and the job regenerates its own schedule on the next run. Details, log locations, and the troubleshooting table are in [OPERATIONS.md](OPERATIONS.md).
+The scheduled job runs `/lecture-sync` 30 minutes after each class ends, on a launchd schedule generated from every class's `schedule:` line, and commits (and pushes, if the repo has a remote). It's self-updating: change a class's schedule and the job regenerates its own schedule on the next run. A second, optional launchd job polls Blackboard every 30 minutes between 07:00 and 23:00, so a column posted during an evening class doesn't wait for the next class to be noticed; both jobs run the same script from the scan onward. Details, log locations, and the troubleshooting table are in [OPERATIONS.md](OPERATIONS.md).
 
 ### Blackboard sync
 
-- Two layers. `scripts/blackboard-scan.py` (part of the scheduled job) diffs the gradebook and content tree through Blackboard's JSON API: new graded assignments get filed, moved due dates get fixed, anything ambiguous gets flagged to `inbox/blackboard-review.md` for a human decision. The `/blackboard-sync` skill covers the rest interactively — browsing content, syllabi, downloads.
+- Two layers. `scripts/blackboard-scan.py` (part of the scheduled job) diffs the gradebook and content tree through Blackboard's JSON API: new graded assignments get filed, moved due dates get fixed, anything ambiguous gets flagged to `inbox/blackboard-review.md` for a human decision. A graded column with no due date is flagged rather than filed, since only you can decide what deadline it should carry. The `/blackboard-sync` skill covers the rest interactively — browsing content, syllabi, downloads.
 - **Login is scripted.** `scripts/blackboard.py` runs the whole Entra SSO flow in Playwright, with the username, password, and TOTP pulled from a password-manager item. The agent never handles the raw credentials — the script does, and the saved session lives in `~/.course-brain/bb-state.json`, outside the repo. This is what makes scheduled, unattended Blackboard scans possible.
-- **Everything is mirrored.** `scripts/blackboard-mirror.py` pulls each class's whole content tree into the workdir's `harvey/`, and spec text into the assignment files. The point is that an agent helping with homework has the slides on hand instead of fetching them mid-task.
+- **Everything is mirrored.** `scripts/blackboard-mirror.py` pulls each class's whole content tree into the workdir's `harvey/`, and spec text into the assignment files. Ultra pages (text posted straight on Blackboard, with no file to download) are rendered to markdown and mirrored beside the files, so that text exists locally too. The point is that an agent helping with homework has the slides on hand instead of fetching them mid-task.
 - **`harvey/` is script-owned**, which is what makes that safe. It's regenerated and pruned to match Blackboard; your own folders (`materials/`, `homework/`, `exams/`, `projects/`, `grading/`) are never touched by the sync. Nothing hand-placed can be lost to a prune, and the mirror can be deleted and rebuilt without thinking about it.
 
 ### Todoist
@@ -70,8 +70,11 @@ schedule: MWF 10:00–10:50
 semester: Fall 2026
 starts: 2026-08-24   # first-run sync range begins here
 ends: 2026-12-11     # the job stops scheduling class runs after this
+discussion_initial_post: friday   # optional; see below
 ---
 ```
+
+`discussion_initial_post` is for classes that want an initial post before the reply deadline. Discussions are recognized by their Blackboard item type, so with that line set the scan files each one as a pair: `Discussion: <topic>` due 23:59 on the named weekday, `Discussion Reply: <topic>` on the gradebook's date. Without it, one assignment.
 
 Assignments are `assignments/<slug>.md` with frontmatter (title, due, posted, source, status, todoist_task_id, optional calendar) and the spec as the body — see `classes/_template/assignments/_template.md`. A submitted one ends with a `## Submitted` section: workdir-relative paths for file deliverables, or the posted text itself for a discussion post.
 
@@ -113,4 +116,4 @@ All in `.claude/skills/`. Each is a procedure the agent follows; none holds stat
 | `/assignment-sync [code]` | create Todoist tasks for assignment files that don't have one | interactive |
 | `/digest [days]` | what happened this week, what's due | interactive |
 
-`scripts/check.py` lints the whole repo (frontmatter, schedules, lecture/assignment shape). Run it before committing class changes.
+`scripts/check.py` lints the whole repo (frontmatter, schedules, lecture/assignment shape, stray merge-conflict markers). Run it before committing class changes. `scripts/test_blackboard_scan.py` covers the scan's parsing and diff logic.

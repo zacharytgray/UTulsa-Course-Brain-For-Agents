@@ -47,6 +47,8 @@ Create `classes/<code lower>/` from the template and wire it up. One class per r
    - commit (and push, if the repo has a remote) — the scheduled sync job regenerates its
      schedule at the next 07:05 weekday run. To make it immediate, run
      `python3 scripts/gen-schedule.py` on the machine that runs the sync.
+   - if the class needs an initial discussion post before the reply deadline, set
+     `discussion_initial_post:` in `class.md` to that weekday
 
 ## Notes
 

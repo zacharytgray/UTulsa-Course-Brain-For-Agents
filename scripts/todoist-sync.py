@@ -168,9 +168,9 @@ def main():
                         print(f"close failed {f}: {e}", file=sys.stderr)
                 continue
             if tid:
-                # due rides along on the refresh so a moved deadline (or a
-                # calendar: true added later) reaches the task, not just the file
-                upd = {"description": desc}
+                # due and title ride along on the refresh so a moved deadline (or
+                # a calendar: true added later, or a retitled file) reaches the task
+                upd = {"description": desc, "content": f"[{code}] {fm['title']}"}
                 if due:
                     upd["due_string"] = due
                 req(f"/tasks/{tid}", upd)
