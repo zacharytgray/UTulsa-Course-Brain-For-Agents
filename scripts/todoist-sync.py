@@ -18,6 +18,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 API = "https://api.todoist.com/api/v1"
+LOCAL = ZoneInfo(os.environ.get("CB_TZ", "America/Chicago"))
 
 
 def token():
@@ -67,7 +68,7 @@ def pretty_due(due):
 def local_ts(iso):
     try:
         dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
-        return dt.astimezone(ZoneInfo("America/Chicago")).strftime("%Y-%m-%d %H:%M")
+        return dt.astimezone(LOCAL).strftime("%Y-%m-%d %H:%M")
     except ValueError:
         return iso
 
@@ -105,7 +106,7 @@ def completed(tid):
 
 def mark_submitted(path, text):
     text = re.sub(r"(?m)^status:[ \t]*open[ \t]*$", "status: submitted", text, count=1)
-    today = datetime.now(ZoneInfo("America/Chicago")).strftime("%Y-%m-%d")
+    today = datetime.now(LOCAL).strftime("%Y-%m-%d")
     if not re.search(r"(?m)^## Submitted\s*$", text):
         text = text.rstrip() + f"\n\n## Submitted\n\nMarked complete in Todoist on {today}.\n"
     open(path, "w").write(text)

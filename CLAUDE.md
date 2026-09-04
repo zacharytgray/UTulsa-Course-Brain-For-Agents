@@ -66,6 +66,7 @@ Read this before looking for a course file.
 
 ```bash
 python3 scripts/check.py
+python3 -m unittest discover -s scripts -p 'test_*.py'
 ```
 
-Lints every class, lecture, and assignment file. Run it before committing class or assignment changes. `python3 scripts/test_blackboard_scan.py` covers the scan's parsing and diff logic. `python3 scripts/gen-schedule.py --dry-run` previews the sync schedule without installing anything (safe on any machine).
+`check.py` lints every class, lecture, and assignment file — run it before committing class or assignment changes. The test suite covers the Blackboard scan's parsing and diff logic, the linter itself, `lecture-import.py`, and the schedule math; it hits no network and installs nothing. `python3 scripts/gen-schedule.py --dry-run` previews the sync schedule without installing anything (safe on any machine).

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-# mirror blackboard course content: files go to the class workdir under
-# harvey/ (mirroring the blackboard folder tree), spec text goes back into the
-# repo's assignment files. never logs in itself - scripts/bb owns the session.
-# state lives in each class's .bb-mirror.json so a rerun only fetches what's
-# new. harvey/ is script-owned: anything in there that blackboard no longer has
-# gets pruned. nothing outside harvey/ is ever touched.
+# mirror blackboard course content: files go to the class workdir under the
+# mirror folder (harvey/ by default, CB_MIRROR_DIRNAME renames it), mirroring
+# the blackboard folder tree; spec text goes back into the repo's assignment
+# files. never logs in itself - scripts/bb owns the session. state lives in each
+# class's .bb-mirror.json so a rerun only fetches what's new. the mirror folder
+# is script-owned: anything in there that blackboard no longer has gets pruned.
+# nothing outside it is ever touched.
 import argparse
 import difflib
 import glob
@@ -21,6 +22,7 @@ from html.parser import HTMLParser
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PLACEHOLDER = "Full spec on Harvey (not yet mirrored)."
 BASE = os.environ.get("CB_BB_BASE", "https://harvey.utulsa.edu")
+MIRROR_DIR = os.environ.get("CB_MIRROR_DIRNAME", "harvey")
 REVIEW = "inbox/blackboard-review.md"
 
 REVIEW_HEADER = """# Blackboard review
@@ -329,7 +331,7 @@ def attached_files(cid, item):
 
 
 def plan(cid, items):
-    # (key, relative path under harvey/, url, remote size or None)
+    # (key, relative path under the mirror folder, url, remote size or None)
     out, taken = [], set()
     for item in sorted(items.values(), key=lambda i: i["id"]):
         found = bbfile_links(item)
@@ -353,7 +355,7 @@ def plan_pages(items, taken):
     # the parent folder is the page: it names the file and holds it. these have
     # no file to download - without this the text only exists on blackboard.
     # taken carries plan()'s paths so a page can't land on a downloaded file.
-    # (key, relative path under harvey/, file contents)
+    # (key, relative path under the mirror folder, file contents)
     out, taken = [], set(taken)
     for item in sorted(items.values(), key=lambda i: i["id"]):
         if item.get("title") != "ultraDocumentBody":
@@ -370,8 +372,8 @@ def plan_pages(items, taken):
             rel, n = f"{stem}-{n}.md", n + 1
         taken.add(rel)
         out.append((f"page::{item['id']}", rel,
-                    f"<!-- mirrored from blackboard item {item['id']}; harvey/ is "
-                    f"script-owned, edits here get overwritten -->\n\n"
+                    f"<!-- mirrored from blackboard item {item['id']}; "
+                    f"{MIRROR_DIR}/ is script-owned, edits here get overwritten -->\n\n"
                     f"# {title}\n\n{md}\n"))
     return out
 
@@ -433,7 +435,7 @@ def add_spec_review(code, name, path, old, new):
         open(REVIEW, "w").write(REVIEW_HEADER)
     diff = "\n".join(list(difflib.unified_diff(
         (old or "").splitlines(), new.splitlines(),
-        fromfile="repo", tofile="harvey", lineterm=""))[:60])
+        fromfile="repo", tofile=MIRROR_DIR, lineterm=""))[:60])
     # a spec with its own code fence (or a cut mid-fence) would leave ours open
     diff, new = re.sub(r"`{3,}", "`", diff), re.sub(r"`{3,}", "`", new)
     lines = [f'\n## {date.today().isoformat()} — {code}: "{name}" spec changed on Harvey', "",
@@ -569,7 +571,7 @@ def save(path, manifest):
 
 
 def prune(root, files, keep, dry):
-    # harvey/ is script-owned, so anything we put there that blackboard dropped
+    # the mirror folder is script-owned, so anything we put there that blackboard dropped
     # goes too. only manifest entries - nothing else under the workdir is ours.
     gone = [k for k in files if k not in keep]
     for k in gone:
@@ -590,7 +592,7 @@ def prune(root, files, keep, dry):
 def run_class(code, cdir, cfm, dry):
     cid = re.search(r"_\d+_1", cfm.get("blackboard_url", "")).group(0)
     workdir = cfm.get("workdir", "")
-    root = os.path.join(workdir, "harvey")
+    root = os.path.join(workdir, MIRROR_DIR)
     items = {i["id"]: i for i in
              fetch_all(f"/learn/api/v1/courses/{cid}/contents?recursive=true&limit=200")}
     columns = [{"name": c.get("effectiveColumnName") or c.get("name") or "",

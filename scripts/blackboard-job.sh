@@ -9,11 +9,26 @@
 #   CB_FORCE_MIRROR=1     always mirror, instead of only when something changed
 #   CB_DRY=1              scan + mirror + rulebook, then stop: no todoist, commit, push, schedule, pings
 #   CB_LOG=<path>         log path named in the failure ping
+#
+# stage overrides (put them in ~/.course-brain/env). each is a command string
+# run with eval, and the literal value "none" skips that stage:
+#   CB_LMS_SCAN_CMD    what diffs the lms against the repo.
+#                      default: /usr/bin/python3 scripts/blackboard-scan.py --skip-todoist
+#   CB_LMS_MIRROR_CMD  what mirrors course files into the workdirs. still gated
+#                      by the rules below. default: /usr/bin/python3 scripts/blackboard-mirror.py
+#   CB_TASK_SYNC_CMD   what pushes assignments to a task manager.
+#                      default: /usr/bin/python3 scripts/todoist-sync.py
+#   CB_NOTIFY_CMD      what sends a phone ping. gets the title in CB_NOTIFY_TITLE
+#                      and the body on stdin. default: the ntfy curl below
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 STAGE="${CB_STAGE:-all}"
 DRY="${CB_DRY:-0}"
+SCAN_CMD="${CB_LMS_SCAN_CMD:-/usr/bin/python3 scripts/blackboard-scan.py --skip-todoist}"
+MIRROR_CMD="${CB_LMS_MIRROR_CMD:-/usr/bin/python3 scripts/blackboard-mirror.py}"
+TASK_CMD="${CB_TASK_SYNC_CMD:-/usr/bin/python3 scripts/todoist-sync.py}"
+NOTIFY_CMD="${CB_NOTIFY_CMD:-}"
 STATE="$HOME/.course-brain"
 MIRROR_STAMP="$STATE/last-mirror"
 FAILS="$STATE/scan-failures"
@@ -24,6 +39,13 @@ mkdir -p "$STATE"
 cd "$REPO"
 
 ping_phone() {  # title, body — no-op when no topic is configured
+  # an override replaces ntfy entirely: title in the env, body on stdin
+  if [ -n "$NOTIFY_CMD" ] && [ "$NOTIFY_CMD" != none ]; then
+    printf '%s\n' "$2" | (export CB_NOTIFY_TITLE="$1"; eval "$NOTIFY_CMD") >/dev/null \
+      || { echo "notify command failed"; return 1; }
+    return 0
+  fi
+  [ "$NOTIFY_CMD" != none ] || { echo "pings disabled (CB_NOTIFY_CMD=none)"; return 1; }
   [ -f "$STATE/ntfy-topic" ] || { echo "ntfy topic not configured, skipping ping"; return 1; }
   local topic url
   topic=$(head -1 "$STATE/ntfy-topic")
@@ -37,7 +59,9 @@ ping_phone() {  # title, body — no-op when no topic is configured
 
 # scan first: it's 2-3 requests per class and it's what catches a new gradebook
 # column. consecutive failures mean the blackboard login is broken, so count them
-if /usr/bin/python3 scripts/blackboard-scan.py --skip-todoist; then
+if [ "$SCAN_CMD" = none ]; then
+  echo "scan stage skipped (CB_LMS_SCAN_CMD=none)"
+elif eval "$SCAN_CMD"; then
   rm -f "$FAILS"
 else
   echo "blackboard scan failed"
@@ -61,7 +85,9 @@ fi
 # when nothing changed, so on a poll run only do it when the scan moved a
 # manifest or the last one is over 2h old
 mirror=0
-if [ "${CB_FORCE_MIRROR:-0}" = 1 ]; then
+if [ "$MIRROR_CMD" = none ]; then
+  echo "mirror stage skipped (CB_LMS_MIRROR_CMD=none)"
+elif [ "${CB_FORCE_MIRROR:-0}" = 1 ]; then
   mirror=1
 elif [ -n "$(git status --porcelain -- 'classes/*/.bb-manifest.json')" ]; then
   echo "manifest changed, mirroring"
@@ -71,12 +97,12 @@ elif [ ! -f "$MIRROR_STAMP" ] || [ -n "$(find "$MIRROR_STAMP" -mmin +120 2>/dev/
   mirror=1
 fi
 if [ "$mirror" = 1 ]; then
-  if /usr/bin/python3 scripts/blackboard-mirror.py; then
+  if eval "$MIRROR_CMD"; then
     touch "$MIRROR_STAMP"
   else
     echo "blackboard mirror failed"
   fi
-else
+elif [ "$MIRROR_CMD" != none ]; then
   echo "mirror skipped (nothing changed, last run under 2h ago)"
 fi
 
@@ -102,7 +128,11 @@ if [ "$DRY" = 1 ]; then
 fi
 
 # after the scan so new assignment files get tasks in the same run
-/usr/bin/python3 scripts/todoist-sync.py || echo "todoist sync failed"
+if [ "$TASK_CMD" = none ]; then
+  echo "task sync skipped (CB_TASK_SYNC_CMD=none)"
+else
+  eval "$TASK_CMD" || echo "task sync failed"
+fi
 
 if [ "$STAGE" = all ]; then
   git add -A

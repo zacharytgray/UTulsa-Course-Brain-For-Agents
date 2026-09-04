@@ -4,7 +4,9 @@
 # each class meeting adds a sync run 30 min after the class ends, plus a
 # weekday 07:05 refresh run so schedule changes propagate on their own.
 # the job script re-runs this after every sync, so editing a class.md
-# is enough to keep the schedule current.
+# is enough to keep the schedule current. launchd fires these in the machine's
+# own local time, so CB_TZ (which the python scripts read) doesn't apply here.
+# CB_REPO_ROOT overrides which tree the classes are read from (tests use it).
 
 import os
 import plistlib
@@ -14,7 +16,7 @@ import sys
 from datetime import date
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(os.environ.get("CB_REPO_ROOT") or Path(__file__).resolve().parent.parent)
 AGENTS = Path.home() / "Library/LaunchAgents"
 LOG_DIR = Path.home() / "Library/Logs/course-brain"
 

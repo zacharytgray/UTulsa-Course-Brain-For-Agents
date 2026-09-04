@@ -3,6 +3,11 @@
 # remote exists, runs /lecture-sync headless, scans blackboard, refreshes the
 # content mirror, syncs todoist, commits, pushes, optionally pings your phone,
 # then regenerates the schedule from class.md so it stays current.
+#
+# env in (put overrides in ~/.course-brain/env; each is a command string run
+# with eval, and the literal value "none" skips that stage):
+#   CB_LECTURE_SYNC_CMD   what pulls new lectures. default: claude -p
+#                         "/lecture-sync" headless, under the same timeout
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -73,16 +78,23 @@ PY
 
 # allow the claude.ai Granola connector too — it's the fallback the model
 # reaches for when the local granola server is unavailable
-"$CLAUDE" -p "/lecture-sync" \
-  --model opus \
-  --permission-mode acceptEdits \
-  --allowedTools "mcp__granola,mcp__claude_ai_Granola,Bash(git pull:*)" &
-claude_pid=$!
-( sleep "$SYNC_TIMEOUT"; kill "$claude_pid" 2>/dev/null ) &
-watchdog=$!
+SYNC_CMD="${CB_LECTURE_SYNC_CMD:-}"
+if [ -z "$SYNC_CMD" ]; then
+  SYNC_CMD="'$CLAUDE' -p '/lecture-sync' --model opus --permission-mode acceptEdits"
+  SYNC_CMD="$SYNC_CMD --allowedTools 'mcp__granola,mcp__claude_ai_Granola,Bash(git pull:*)'"
+fi
+
 sync_ok=1
-wait "$claude_pid" || { sync_ok=0; echo "claude run failed or timed out"; }
-kill "$watchdog" 2>/dev/null || true
+if [ "$SYNC_CMD" = none ]; then
+  echo "lecture stage skipped (CB_LECTURE_SYNC_CMD=none)"
+else
+  eval "$SYNC_CMD" &
+  sync_pid=$!
+  ( sleep "$SYNC_TIMEOUT"; kill "$sync_pid" 2>/dev/null ) &
+  watchdog=$!
+  wait "$sync_pid" || { sync_ok=0; echo "lecture sync command failed or timed out"; }
+  kill "$watchdog" 2>/dev/null || true
+fi
 
 # scan, mirror, rulebook copy, todoist, commit, push, schedule, ping — shared
 # with the optional poll job. worth running even if the lecture run died; it's a

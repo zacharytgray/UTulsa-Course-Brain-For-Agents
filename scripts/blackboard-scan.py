@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-LOCAL = ZoneInfo("America/Chicago")
+LOCAL = ZoneInfo(os.environ.get("CB_TZ", "America/Chicago"))
 SUMMARY = "/tmp/course-brain-scan-summary"
 REVIEW = "inbox/blackboard-review.md"
 SKIP = ("attendance", "overall grade")

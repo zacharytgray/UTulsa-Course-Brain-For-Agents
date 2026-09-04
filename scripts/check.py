@@ -19,6 +19,7 @@ _spec.loader.exec_module(gen_schedule)
 SEG = gen_schedule.SEG
 frontmatter = gen_schedule.frontmatter
 
+ID_FIELDS = ("granola_id", "source_id")
 STATUSES = {"open", "submitted", "graded"}
 ROLES = {"student", "ta"}
 WEEKDAYS = {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}
@@ -100,7 +101,7 @@ def check_class(md, rel):
 def check_lecture(md, rel, code, seen_ids):
     fm = frontmatter(md)
     text = md.read_text()
-    for field in ("granola_id", "class", "date"):
+    for field in ("class", "date"):
         if not fm.get(field):
             bad(rel, f"missing frontmatter field '{field}'")
     prefix = md.stem[:10]
@@ -112,12 +113,19 @@ def check_lecture(md, rel, code, seen_ids):
         bad(rel, f"class '{fm['class']}' doesn't match class.md code '{code}'")
     if not TRANSCRIPT.search(text):
         bad(rel, "no '## Transcript' heading")
-    gid = fm.get("granola_id")
-    if gid:
-        if gid in seen_ids:
-            bad(rel, f"duplicate granola_id '{gid}' (also in {seen_ids[gid]})")
+    # granola_id for granola meetings, source_id for anything imported by
+    # lecture-import.py. exactly one, and no id used twice
+    ids = [f for f in ID_FIELDS if fm.get(f)]
+    if not ids:
+        bad(rel, f"needs one of {' or '.join(ID_FIELDS)} in frontmatter")
+    elif len(ids) > 1:
+        bad(rel, f"has both {' and '.join(ids)}; keep exactly one")
+    else:
+        lid = fm[ids[0]]
+        if lid in seen_ids:
+            bad(rel, f"duplicate lecture id '{lid}' (also in {seen_ids[lid]})")
         else:
-            seen_ids[gid] = rel
+            seen_ids[lid] = rel
 
 
 def check_assignment(md, rel):
