@@ -14,9 +14,11 @@ Decision: **markdown-first, no app.**
 ## The pipeline
 
 ```
-Granola (record lecture, folder per class)
-   │  /lecture-sync skill (auto via the scheduled job 30 min after class; manual any time)
-   ▼
+Granola (record lecture, folder per class)        any other transcript source
+   │  /lecture-sync skill (auto via the           │  scripts/lecture-import.py
+   │  scheduled job 30 min after class;           │  (writes source_id instead
+   │  manual any time)                            │  of granola_id)
+   ▼                                              ▼
 classes/<class>/lectures/YYYY-MM-DD.md   ← summary + full transcript
    │
 Blackboard / Harvey (scripted login + API scan + mirror; browser skill as fallback)
@@ -31,7 +33,7 @@ Todoist (one project per class, or one School project)
 
 - Each class gets a Granola folder. The folder id lives in the class's `class.md`. Folder creation is manual (the MCP is read-only) — step 1 of [ADDING-A-CLASS.md](ADDING-A-CLASS.md).
 - The `/lecture-sync` skill (in `.claude/skills/`) lists meetings in each class folder, pulls transcript + summary via the Granola MCP, and writes one file per lecture.
-- **Idempotency lives in the repo, not in sync state.** Each lecture file's frontmatter carries the `granola_id`; the skill skips any meeting id already filed. No last-sync timestamps to track or corrupt, and re-running is always safe. This falls out of the MCP being read-only — Granola can't be marked "processed", so the repo is the ledger.
+- **Idempotency lives in the repo, not in sync state.** Each lecture file's frontmatter carries the `granola_id` (or `source_id`, for a file `scripts/lecture-import.py` wrote from another transcript source); the skill skips any meeting id already filed. No last-sync timestamps to track or corrupt, and re-running is always safe. This falls out of the MCP being read-only — Granola can't be marked "processed", so the repo is the ledger.
 - Folder membership decides the class, so this skill never needs `inbox/`. The inbox stays as a fallback for other flows (e.g. manual exports).
 - **Scheduling note (verified 2026-08):** claude.ai connectors do **not** reach headless CLI runs — `claude mcp list` in a scheduled job shows only locally-configured servers. So hands-free sync needs the official Granola remote MCP (`https://mcp.granola.ai/mcp`) added to the CLI config of the machine that runs the job, with a one-time OAuth there. Everything else is automated.
 
@@ -44,7 +46,7 @@ The scheduled job runs `/lecture-sync` 30 minutes after each class ends, on a la
 - Two layers. `scripts/blackboard-scan.py` (part of the scheduled job) diffs the gradebook and content tree through Blackboard's JSON API: new graded assignments get filed, moved due dates get fixed, anything ambiguous gets flagged to `inbox/blackboard-review.md` for a human decision. A graded column with no due date is flagged rather than filed, since only you can decide what deadline it should carry. The `/blackboard-sync` skill covers the rest interactively — browsing content, syllabi, downloads.
 - **Login is scripted.** `scripts/blackboard.py` runs the whole Entra SSO flow in Playwright, with the username, password, and TOTP pulled from a password-manager item. The agent never handles the raw credentials — the script does, and the saved session lives in `~/.course-brain/bb-state.json`, outside the repo. This is what makes scheduled, unattended Blackboard scans possible.
 - **Everything is mirrored.** `scripts/blackboard-mirror.py` pulls each class's whole content tree into the workdir's `harvey/`, and spec text into the assignment files. Ultra pages (text posted straight on Blackboard, with no file to download) are rendered to markdown and mirrored beside the files, so that text exists locally too. The point is that an agent helping with homework has the slides on hand instead of fetching them mid-task.
-- **`harvey/` is script-owned**, which is what makes that safe. It's regenerated and pruned to match Blackboard; your own folders (`materials/`, `homework/`, `exams/`, `projects/`, `grading/`) are never touched by the sync. Nothing hand-placed can be lost to a prune, and the mirror can be deleted and rebuilt without thinking about it.
+- **`harvey/` is script-owned**, which is what makes that safe. (`CB_MIRROR_DIRNAME` renames that folder for a school that doesn't call its Blackboard Harvey; see [ADAPTING.md](ADAPTING.md).) It's regenerated and pruned to match Blackboard; your own folders (`materials/`, `homework/`, `exams/`, `projects/`, `grading/`) are never touched by the sync. Nothing hand-placed can be lost to a prune, and the mirror can be deleted and rebuilt without thinking about it.
 
 ### Todoist
 
@@ -116,4 +118,4 @@ All in `.claude/skills/`. Each is a procedure the agent follows; none holds stat
 | `/assignment-sync [code]` | create Todoist tasks for assignment files that don't have one | interactive |
 | `/digest [days]` | what happened this week, what's due | interactive |
 
-`scripts/check.py` lints the whole repo (frontmatter, schedules, lecture/assignment shape, stray merge-conflict markers). Run it before committing class changes. `scripts/test_blackboard_scan.py` covers the scan's parsing and diff logic.
+`scripts/check.py` lints the whole repo (frontmatter, schedules, lecture/assignment shape, stray merge-conflict markers). Run it before committing class changes. `python3 -m unittest discover -s scripts -p 'test_*.py'` runs the test suite, which covers the scan's parsing and diff logic, the linter, the schedule generator, and lecture import.
