@@ -73,6 +73,12 @@ class LectureImportTest(unittest.TestCase):
         # no summary given, so the file says so instead of pretending
         self.assertIn("Summary not written yet", text)
 
+    def test_quotes_in_title_stay_valid_yaml(self):
+        res = self.run_import("--date", "2026-08-26", "--title", 'The "big O" lecture')
+        self.assertEqual(res.returncode, 0, res.stderr)
+        text = (self.cdir / "lectures" / "2026-08-26.md").read_text()
+        self.assertIn('title: "The \\"big O\\" lecture"', text)
+
     def test_default_title_and_given_summary(self):
         summary = self.root / "summary.md"
         summary.write_text("Deleting from a singly linked list.\n")

@@ -140,7 +140,7 @@ python3 -m unittest discover -s scripts -p 'test_*.py'
 |---|---|---|
 | `Not logged in · Please run /login` | Claude CLI session expired | run `claude` interactively, then `/login` |
 | granola tool errors / "needs authentication" | Granola OAuth expired | `claude` then `/mcp` → authenticate `granola`. Check with `claude mcp list` |
-| `claude run failed or timed out` with nothing else | headless run hung or crashed | look at the lines above it; force a run manually and watch |
+| `lecture sync command failed or timed out` with nothing else | headless run hung or crashed | look at the lines above it; force a run manually and watch |
 | `already running (pid N), skipping` every time | a run is genuinely stuck | `kill N`, or `rm -rf /tmp/course-brain-sync.lock` (`/tmp/course-brain-poll.lock` for the poll log) if that pid is already gone; the next run takes over |
 | poll log has no `=== run` line for over an hour | the agent was unloaded, or every run is deferring | `launchctl print gui/$(id -u)/com.course-brain.blackboard-poll`; if it's gone, `python3 scripts/gen-schedule.py`. `deferring to lecture-sync` every run means a stuck lecture lock; see the row above |
 | lectures filed by the job but missing on another machine | you haven't pulled | `git pull` |
@@ -150,7 +150,7 @@ python3 -m unittest discover -s scripts -p 'test_*.py'
 | entries piling up in `inbox/blackboard-review.md` | the scan or the lecture flow flagged things they won't decide alone | process them — see [Phone approval flow](#phone-approval-flow-optional). They stay flagged until you delete them |
 | `blackboard scan failed` repeatedly, or a `blackboard scan failing` ping | the Blackboard session or login is broken | `scripts/bb check`, then `CB_DEBUG=1 scripts/bb login` and read `~/.course-brain/login-fail.png`. `~/.course-brain/scan-failures` holds the streak; it clears itself on the next good scan |
 | `op timed out after 90s` | no `OP_SERVICE_ACCOUNT_TOKEN`, so `op` fell back to the desktop app and stalled on a prompt nobody could answer | put the service-account token in `~/.course-brain/env` |
-| `todoist sync failed` in the log | token missing or Todoist API down | check `TODOIST_API_TOKEN` / `~/.config/todoist/token`; tasks catch up on the next run |
+| `task sync failed` in the log | token missing or Todoist API down | check `TODOIST_API_TOKEN` / `~/.config/todoist/token`; tasks catch up on the next run |
 | lecture missing entirely | note isn't in the class's Granola folder, or transcript still processing | move the note into the folder; the next run picks it up. Pending transcripts retry automatically |
 | launchd agent gone (`launchctl print gui/$(id -u)/com.course-brain.lecture-sync` fails) | plist reload failed | `python3 scripts/gen-schedule.py` — it re-bootstraps |
 | `no state, run: scripts/bb login` | no saved Blackboard session on this machine | `scripts/bb login` |

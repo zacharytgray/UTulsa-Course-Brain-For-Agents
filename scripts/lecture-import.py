@@ -84,6 +84,7 @@ def main():
         return 0
 
     title = args.title or f"{code} lecture {args.date}"
+    title = title.replace("\\", "\\\\").replace('"', '\\"')  # keep the yaml quoting valid
     path = free_path(lectures, args.date)
     path.write_text(
         "---\n"

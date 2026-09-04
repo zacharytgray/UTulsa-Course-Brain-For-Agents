@@ -23,6 +23,10 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
+
+# the launchd payloads source this too; repeated here so a direct run picks up
+# the overrides as well
+[ -f "$HOME/.course-brain/env" ] && source "$HOME/.course-brain/env"
 STAGE="${CB_STAGE:-all}"
 DRY="${CB_DRY:-0}"
 SCAN_CMD="${CB_LMS_SCAN_CMD:-/usr/bin/python3 scripts/blackboard-scan.py --skip-todoist}"

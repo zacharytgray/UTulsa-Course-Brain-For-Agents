@@ -34,11 +34,13 @@ What is genuinely not pluggable is the LMS itself. `blackboard-scan.py` and `bla
 
 Setting any of the five command overrides to the literal string `none` skips that stage. `CB_NOTIFY_CMD=none` disables pings entirely.
 
+One caveat. Each override runs through `eval` in the job's own shell, not a subshell, so a command that calls `exit`, changes directory, or sets a variable the script also uses will affect the rest of the run. Put anything beyond a single command in its own script and point the variable at that.
+
 Other environment variables the scripts read:
 
 | Variable | Default | Read by | Meaning |
 |---|---|---|---|
-| `CB_MIRROR_DIRNAME` | `harvey` | `blackboard-mirror.py`, and the scan's diff label | name of the script-owned mirror folder inside each workdir |
+| `CB_MIRROR_DIRNAME` | `harvey` | `blackboard-mirror.py` (folder name, and the diff label in review flags) | name of the script-owned mirror folder inside each workdir |
 | `CB_TZ` | `America/Chicago` | `blackboard-scan.py`, `todoist-sync.py` | timezone Blackboard's UTC due dates convert into |
 | `CB_BB_BASE` | `https://harvey.utulsa.edu` | `blackboard.py`, `blackboard-mirror.py` | your school's Blackboard domain |
 | `CB_BB_STATE` | `~/.course-brain/bb-state.json` | `blackboard.py` | where the session cookies are saved |
@@ -50,6 +52,7 @@ Other environment variables the scripts read:
 | `CB_FORCE_MIRROR` | `0` | `blackboard-job.sh` | mirror even when nothing changed |
 | `CB_STAGE` | `all` | `blackboard-job.sh` | `all` stages everything, `scan` stages only scan and task outputs |
 | `CB_LOG` | the lecture-sync log | `blackboard-job.sh` | log path named in the failure ping |
+| `CB_REPO_ROOT` | the repo the script lives in | `gen-schedule.py`, `lecture-import.py` | point at another tree (the tests use it) |
 | `COURSE_BRAIN_FROM_JOB` | unset | `gen-schedule.py` | set by the job so a schedule regeneration knows it's automated |
 
 ## Swap the task manager (Todoist to anything)
@@ -111,7 +114,7 @@ Three scripts make up the Blackboard integration, and they're tied to Blackboard
 
 **Canvas, Moodle, or Brightspace.** There is no LMS abstraction to implement, so this is a rewrite of the scan and the mirror against your LMS's API, and those APIs are friendlier than Blackboard's. Aim at the same outputs, assignment files plus review flags plus a manifest for the scan, and a workdir mirror plus spec text plus a mirror state file for the mirror. Then point `CB_LMS_SCAN_CMD` and `CB_LMS_MIRROR_CMD` at your scripts. Everything else carries over unchanged, the job script, the skills, the task sync, the linter, and the repo layout.
 
-**Renaming the mirror folder.** "Harvey" is TU's name for its Blackboard install. `CB_MIRROR_DIRNAME=blackboard` changes the folder name inside every workdir and the diff label the scan uses in review flags. Three places still say Harvey in prose, and you can leave them or edit them. They are `CLAUDE.md`, the blackboard-sync skill, and the `Full spec on Harvey (not yet mirrored).` placeholder string that the scan writes and the mirror looks for. That placeholder is a matched pair across two scripts, so if you change it, change both.
+**Renaming the mirror folder.** "Harvey" is TU's name for its Blackboard install. `CB_MIRROR_DIRNAME=blackboard` changes the folder name inside every workdir and the diff label the mirror uses in review flags. Three places still say Harvey in prose, and you can leave them or edit them. They are `CLAUDE.md`, the blackboard-sync skill, and the `Full spec on Harvey (not yet mirrored).` placeholder string that the scan writes and the mirror looks for. That placeholder is a matched pair across two scripts, so if you change it, change both.
 
 ## Swap the password manager (1Password to anything)
 
