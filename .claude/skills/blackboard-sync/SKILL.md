@@ -77,8 +77,12 @@ shows the semester you want, it can default to the wrong one.
   carry `id`, `parentId`, `title`, and `contentHandler` (`resource/x-bb-folder`, `-document`,
   `-file`, `-asmt-test-link`, `-courselink`, `-blti-link`, …). `body.rawText` is HTML and embeds
   attachments as `<a data-bbfile='{"displayName":...}' href="/bbcswebdav/pid-...">`; those
-  `/bbcswebdav/...` urls download directly with the same cookies. Raise `limit` — 200 truncates a
-  big course mid-tree.
+  `/bbcswebdav/...` urls download directly with the same cookies. Read the anchor's `href`
+  first: the `resourceUrl` inside `data-bbfile` usually points at the editor's scratch copy under
+  `/sessions/...`, which 403s for students. Assessment items (`-asmt-test-link`, i.e. Ultra
+  assignments and tests) have an empty `body`; their instructions live at
+  `contentDetail["resource/x-bb-asmt-test-link"].test.assessment.instructions.rawText`. Raise
+  `limit` — 200 truncates a big course mid-tree.
 - `GET /learn/api/v1/courses/<id>/gradebook/columns?limit=100` — graded items with
   `effectiveColumnName` (the `name` field is null on Harvey), `dueDate`, `possible` points, and
   `contentId`. This is the authoritative due-date source, better than anything on the content

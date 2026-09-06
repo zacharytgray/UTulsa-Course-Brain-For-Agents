@@ -70,6 +70,15 @@ def bb_head(path):
         return {}
 
 
+# ultra assessments keep their instructions under contentDetail, not body
+def spec_html(item):
+    html = (item.get("body") or {}).get("rawText") or ""
+    if html:
+        return html
+    test = ((item.get("contentDetail") or {}).get("resource/x-bb-asmt-test-link") or {}).get("test") or {}
+    return ((test.get("assessment") or {}).get("instructions") or {}).get("rawText") or ""
+
+
 def fetch_all(path):
     out = []
     while path:
@@ -275,8 +284,47 @@ def page_md(raw):
 # --- content tree -----------------------------------------------------------
 
 FOLDERS = ("resource/x-bb-folder", "resource/x-bb-lesson")
-BBFILE_TAG = re.compile(r"(?is)<a\b[^>]*data-bbfile=[^>]*>")
-ATTR = re.compile(r'(\w[\w-]*)="([^"]*)"')
+
+
+class Anchors(HTMLParser):
+    # every <a> in a body, with its visible text. a regex can't do this: the
+    # alt text inside data-bbfile carries raw ">" and cuts the tag match short.
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.out, self.attrs, self.text = [], None, []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "a":
+            self.end_a()
+            self.attrs, self.text = dict(attrs), []
+
+    def handle_data(self, data):
+        if self.attrs is not None:
+            self.text.append(data)
+
+    def handle_endtag(self, tag):
+        if tag == "a":
+            self.end_a()
+
+    def end_a(self):
+        if self.attrs is not None:
+            self.out.append((self.attrs, squeeze("".join(self.text))))
+            self.attrs = None
+
+
+def anchors(raw):
+    p = Anchors()
+    p.feed(raw or "")
+    p.close()
+    p.end_a()
+    return p.out
+
+
+def filelink(url):
+    # course files all live under /bbcswebdav/. the editor's scratch uploads
+    # (/sessions/...) 403 for students, and /ultra/... links are pages
+    url = (url or "").replace(BASE, "")
+    return url if url.startswith("/bbcswebdav/") else ""
 
 
 def folder_path(items, item):
@@ -290,21 +338,28 @@ def folder_path(items, item):
 
 
 def bbfile_links(item):
-    raw = (item.get("body") or {}).get("rawText") or ""
-    out = []
-    for tag in BBFILE_TAG.findall(raw):
-        a = dict(ATTR.findall(tag))
+    # every file a page links, not just the ones the editor tagged. deduped by
+    # url, so an anchor carrying both a resourceUrl and an href counts once
+    out, seen = [], set()
+    for a, text in anchors((item.get("body") or {}).get("rawText") or ""):
         try:
-            meta = json.loads(html.unescape(a.get("data-bbfile", "")))
+            meta = json.loads(a.get("data-bbfile") or "")
         except ValueError:
             meta = {}
-        url = meta.get("resourceUrl") or html.unescape(a.get("href", ""))
-        url = url.replace(BASE, "")
-        name = meta.get("displayName") or meta.get("linkName") or os.path.basename(url)
-        # /sessions/... are the editor's scratch uploads (inline images); they
-        # 403 for students, so planning them just churns failures every run
-        if url.startswith("/") and not url.startswith("/sessions/"):
-            out.append((sanitize(name), url, meta.get("fileSize")))
+        # the href is what a student clicks, so it always works. resourceUrl is
+        # a hint that often points at a scratch upload or a pre-import copy
+        url = filelink(a.get("href")) or filelink(meta.get("resourceUrl"))
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        name = meta.get("displayName") or meta.get("linkName") or text or os.path.basename(url)
+        # display names and link text often drop the extension the file has,
+        # and drive renames an extensionless file out from under the manifest.
+        # splitext isn't enough on its own - a real extension is short
+        if not re.fullmatch(r"\.\w{1,5}", os.path.splitext(name)[1]):
+            name = name.rstrip(". ") + os.path.splitext(
+                meta.get("fileName") or os.path.basename(url))[1]
+        out.append((sanitize(name), url, meta.get("fileSize")))
     return out
 
 
@@ -465,7 +520,7 @@ def sync_specs(code, cid, cdir, items, columns, manifest, seen_items, cache, dry
         fm, _ = frontmatter(text)
         item, spec = None, ""
         for cand in match_content(cid, items, columns, fm.get("title", ""), cache):
-            spec = html_to_md((cand.get("body") or {}).get("rawText") or "")
+            spec = html_to_md(spec_html(cand))
             if spec:
                 item = cand
                 break
@@ -489,7 +544,7 @@ def sync_specs(code, cid, cdir, items, columns, manifest, seen_items, cache, dry
                 specs[rel] = {"item": item["id"], "prefix": prefix.lstrip("\n"), "hash": h(new)}
             continue
 
-        raw_hash = h((item.get("body") or {}).get("rawText") or "")
+        raw_hash = h(spec_html(item))
         was = (seen_items.get(item["id"]) or {}).get("raw_hash")
         rec = specs.get(rel)
         if was is None or was == raw_hash:
@@ -735,7 +790,7 @@ def run_class(code, cdir, cfm, dry):
         seen = list(items.values()) + [i for i in offtree.values() if i]
         manifest["items"] = {
             i["id"]: {"modified": i.get("modifiedDate"),
-                      "raw_hash": h((i.get("body") or {}).get("rawText") or "")}
+                      "raw_hash": h(spec_html(i))}
             for i in seen}
     if not dry:
         save(mpath, manifest)
