@@ -12,7 +12,7 @@ Three things, and that's all:
 
 It is not an agent. Nothing in here thinks. It is the knowledge base and the plumbing, and whatever agent you run does the reasoning. Claude Code, Codex, and Hermes all work, because the project context is plain markdown and the skills are plain procedures.
 
-If you saw NEPTR at a talk, NEPTR is not in this repo. NEPTR is a Hermes agent with a persona and a tool-permission set I wrote, pointed at my private copy of this template. The persona, the Hermes configuration, my own semester repo, and the machine it runs on all live somewhere else. What's here is the part that transfers to you.
+If you saw NEPTR at a talk, it is not in this repo. NEPTR was the agent I demoed: a Hermes agent with a persona and a tool-permission set I wrote, pointed at my private copy of this template. It still runs, under a different persona. The persona, the Hermes configuration, my own semester repo, and the machine it runs on all live somewhere else. What's here is the part that transfers to you.
 
 There is also no course data in here. Clone it and `classes/` holds one `_template/`, plus `examples/cs-2123/` as a synthetic class you can copy in to see the shape. Your copy fills up with your schedule, your professors' words, and your coursework, so make it private and keep it that way.
 
